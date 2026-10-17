@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { randomUUID } = require('node:crypto');
 const { onRequest } = require('firebase-functions/v2/https');
 const { admin } = require('../../bootstrap/firebaseAdmin');
@@ -136,18 +138,25 @@ const serializePreview = (previewId, state) => ({
   expiresAtMs: state.expiresAtMs,
 });
 
-/** @param {any} db @param {string} previewId @param {string} ownerAuthUid @param {number} nowMs */
-const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) => {
-  const previewRef = db.ref(`notification_audience_previews/${previewId}`);
+const acquireAudiencePreviewLease = async ({ previewRef, ownerAuthUid, nowMs }) => {
   const ownerId = randomUUID(); let acquired = false;
-  const lease = await previewRef.transaction((state) => {
+  const lease = await transactExistingRecord(previewRef, (state) => {
     if (!state || state.ownerAuthUid !== ownerAuthUid || Number(state.expiresAtMs || 0) <= nowMs) return;
     if (state.status === 'complete') return state;
     if (state.lease && Number(state.lease.expiresAtMs || 0) > nowMs) return state;
     acquired = true;
     return { ...state, lease: { ownerId, expiresAtMs: nowMs + 120_000 }, updatedAtMs: nowMs };
   });
-  let state = lease?.snapshot?.val?.() || null;
+  const state = lease?.snapshot?.val?.() || null;
+  return { state, ownerId, acquired: Boolean(lease.applied && acquired && state?.lease?.ownerId === ownerId) };
+};
+
+/** @param {any} db @param {string} previewId @param {string} ownerAuthUid @param {number} nowMs */
+const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) => {
+  const previewRef = db.ref(`notification_audience_previews/${previewId}`);
+  const claim = await acquireAudiencePreviewLease({ previewRef, ownerAuthUid, nowMs });
+  const { ownerId, acquired } = claim;
+  let state = claim.state;
   if (!state || state.ownerAuthUid !== ownerAuthUid) return null;
   if (state.status === 'complete' || !acquired) return serializePreview(previewId, state);
   let cursor = state.cursor || null;
@@ -183,7 +192,7 @@ const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) =
     });
   } while (cursor && pages < PREVIEW_PAGE_LIMIT);
   const skipped = audience - eligible;
-  await previewRef.transaction((current) => {
+  await transactExistingRecord(previewRef, (current) => {
     if (!current || current.lease?.ownerId !== ownerId) return;
     return { ...current, cursor, pages: Number(current.pages || 0) + pages, audience, eligible, skipped, skipReasons, uidClaims, tokenClaims, status: cursor ? 'processing' : 'complete', lease: null, updatedAtMs: nowMs };
   });
@@ -265,7 +274,7 @@ const activateNotificationJobRequeue = async ({ jobRef, job, nowMs }) => {
   let acquired = false;
   let retentionBlocked = false;
   let busy = false;
-  const lease = await jobRef.transaction((current) => {
+  const lease = await transactExistingRecord(jobRef, (current) => {
     if (!current || !REQUEUEABLE_STATUSES.has(current.status)
       || Number(current.completedAtMs || 0) !== Number(job.completedAtMs || 0)
       || Number(current.retentionGeneration || 0) !== Number(job.retentionGeneration || 0)) return undefined;
@@ -283,7 +292,7 @@ const activateNotificationJobRequeue = async ({ jobRef, job, nowMs }) => {
   });
   const leasedJob = lease?.snapshot?.val?.() || null;
   return {
-    acquired: Boolean(acquired && leasedJob?.lease?.ownerId === leaseOwnerId),
+    acquired: Boolean(lease?.applied && acquired && leasedJob?.lease?.ownerId === leaseOwnerId),
     busy,
     job: leasedJob,
     leaseOwnerId,
@@ -361,7 +370,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
       state = (await stateRef.once('value')).val();
     }
     let retentionBlocked = false;
-    await jobRef.transaction((current) => {
+    await transactExistingRecord(jobRef, (current) => {
       if (!current || current.lease?.ownerId !== activation.leaseOwnerId) return undefined;
       if (isNotificationLifecycleRetentionFenced(current, nowMs)) {
         retentionBlocked = true;
@@ -387,7 +396,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
     return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
   }
   const leaseOwner = randomUUID(); let acquired = false;
-  const lease = await stateRef.transaction((current) => {
+  const lease = await transactExistingRecord(stateRef, (current) => {
     if (!current || current.status !== 'processing') return current;
     if (current.lease && Number(current.lease.expiresAtMs || 0) > nowMs) return current;
     acquired = true;
@@ -400,7 +409,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
     };
   });
   state = lease?.snapshot?.val?.() || state;
-  if (!acquired) return { success: true, complete: false, status: 'processing', requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped };
+  if (!lease.applied || !acquired || state.lease?.ownerId !== leaseOwner) return { success: true, complete: false, status: 'processing', requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped };
   let query = db.ref(`notification_job_recipients/${jobId}`).orderByKey();
   if (state.cursor) query = query.startAfter(state.cursor);
   const records = Object.entries((await query.limitToFirst(REQUEUE_PAGE_SIZE + 1).once('value')).val() || {}).sort(([left], [right]) => left.localeCompare(right));
@@ -412,14 +421,15 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
   }
   const complete = records.length <= REQUEUE_PAGE_SIZE;
   const cursor = complete || !selected.length ? null : selected[selected.length - 1][0];
-  await stateRef.transaction((current) => current?.lease?.ownerId === leaseOwner
+  await transactExistingRecord(stateRef, (current) => current?.lease?.ownerId === leaseOwner
     ? { ...current, cursor, status: complete ? 'complete' : 'processing', requeued: Number(current.requeued || 0) + requeued, skipped: Number(current.skipped || 0) + skipped, lease: null, expiresAtMs: complete ? nowMs + REQUEUE_COMPLETION_RETENTION_MS : null, recoveryDueAtMs: complete ? null : nowMs, updatedAtMs: nowMs }
-    : current);
+    : undefined);
   state = (await stateRef.once('value')).val();
-  if (complete && Number(state.requeued || 0) === 0) {
+  if (!state) return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
+  if (state.status === 'complete' && Number(state.requeued || 0) === 0) {
     job = await recoverZeroResultNotificationRequeue({ db, jobId, state, nowMs });
   }
-  return { success: true, complete, status: state.status, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job: (await jobRef.once('value')).val() };
+  return { success: true, complete: state.status === 'complete', status: state.status, requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped, job: (await jobRef.once('value')).val() };
 };
 
 const requeueNotificationJob = onRequest({ region: 'europe-west1', maxInstances: 5 }, async (req, res) => {

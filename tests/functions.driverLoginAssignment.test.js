@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const assignment = require('../functions/src/domains/driver-assignment/driverAssignment');
 const sessions = require('../functions/lib/appSession');
+const { driverLoginClaimAllowedByPolicy } = require('../functions/src/domains/driver-auth/driverDevicePolicy');
 
 const UID = 'fixture-driver-phone';
 const DRIVER = 'D-ASSIGNMENT';
@@ -38,7 +39,7 @@ Module._load = function mocked(request, parent, isMain) {
     ensureDriverLoginPolicy: async () => ({ policy: context.policy }),
     acquireDriverLoginAdmission: async () => ({ acquired: true, admissionId: 'policy-admission', policy: context.policy }),
     completeDriverLoginAdmission: async () => { context.policyCompleted += 1; return true; },
-    driverBindingAllowedByPolicy: () => true,
+    driverLoginClaimAllowedByPolicy,
     hashPolicyIdentifier: () => 'opaque-hash',
     releaseDriverLoginAdmission: async () => { context.policyReleased += 1; },
     reserveDriverLoginClaim: async () => ({ acquired: true, path: 'private-claim' }),

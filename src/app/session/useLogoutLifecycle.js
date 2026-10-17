@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import appSessionService from '../../../services/appSessionService';
-import localSessionCleanupService from '../../../services/localSessionCleanupService';
 import logger from '../../../services/loggerService';
+import { sameSessionIdentity } from '../../../services/appSessionTransition';
 
 export default function useLogoutLifecycle({
   appSession,
+  appSessionRef,
+  onSession,
   disabled = false,
   isConnected,
   logoutContextRef,
@@ -19,6 +21,8 @@ export default function useLogoutLifecycle({
   const appSessionListenerRef = useRef(null);
   const retryAttemptRef = useRef(0);
   const retryInFlightRef = useRef(false);
+  const latestRef = useRef(null);
+  latestRef.current = { onSession, purgeLocalSession, appSession, userUid, disabled, logoutState: logoutStatus.state };
 
   const retryPendingLogout = useCallback(async () => {
     if (logoutStatus.state === 'requesting' || retryInFlightRef.current) return;
@@ -27,7 +31,11 @@ export default function useLogoutLifecycle({
     try {
       setLogoutStatus((current) => ({ ...current, state: 'requesting', error: null }));
       if (logoutStatus.state === 'failed') {
-        const cleanup = await localSessionCleanupService.cleanup(logoutContextRef.current || {});
+        const context = logoutContextRef.current;
+        const cleanup = await latestRef.current.purgeLocalSession({
+          capturedSession: context?.appSession || appSessionRef?.current || latestRef.current.appSession,
+          capturedContext: context,
+        });
         if (!cleanup.success) {
           setLogoutStatus((current) => ({
             ...current,
@@ -40,7 +48,11 @@ export default function useLogoutLifecycle({
       const result = await appSessionService.retryPendingEnd();
       if (result.success) {
         retryAttemptRef.current = 0;
-        if (await appSessionService.completeEnd({ expectedSessionId: result.pending?.sessionId }) === false) return;
+        const expectedSessionId = result.pending?.sessionId || logoutContextRef.current?.appSession?.sessionId;
+        if (await appSessionService.completeEnd({ expectedSessionId }) === false) {
+          setLogoutStatus(current => ({ ...current, state: 'failed', error: 'Your session changed. Reopen the app before trying again.' }));
+          return;
+        }
         logoutContextRef.current = null;
         setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
         setCurrentScreen('Login');
@@ -53,10 +65,12 @@ export default function useLogoutLifecycle({
           ? 'We still cannot reach the server. We will keep trying when the connection returns.'
           : 'Logout is still awaiting server confirmation. Please try again.',
       }));
+    } catch {
+      setLogoutStatus(current => ({ ...current, state: 'failed', error: 'Local logout cleanup is still pending. Please try again.' }));
     } finally {
       retryInFlightRef.current = false;
     }
-  }, [logoutContextRef, logoutStatus.state, setCurrentScreen, setLogoutStatus]);
+  }, [appSessionRef, logoutContextRef, logoutStatus.state, setCurrentScreen, setLogoutStatus]);
 
   useEffect(() => {
     if (!isConnected || logoutStatus.state !== 'pending_network') return;
@@ -73,6 +87,7 @@ export default function useLogoutLifecycle({
     const unsubscribe = appSessionService.subscribe({
       authUid: userUid,
       expectedSession: appSession,
+      onSession: (event) => latestRef.current.onSession?.(event),
       subscribeToForeground: (checkExpiry) => {
         const subscription = AppState.addEventListener('change', (state) => {
           if (state === 'active') checkExpiry();
@@ -81,10 +96,16 @@ export default function useLogoutLifecycle({
       },
       onRevoked: async ({ reason }) => {
         if (generation !== sessionGenerationRef.current) return;
-        setLogoutStatus({ state: 'requesting', error: null, diagnostic: appSession.sessionId.slice(-6) });
-        const cleanup = await purgeLocalSession({ capturedSession: appSession });
+        const latest = latestRef.current;
+        const capturedSession = appSessionRef ? appSessionRef.current : latest.appSession;
+        if (latest.disabled || latest.logoutState !== 'idle' || latest.userUid !== userUid
+          || !sameSessionIdentity(capturedSession, appSession)) return;
+        logoutContextRef.current = { authUid: userUid, appSession: capturedSession };
+        setLogoutStatus({ state: 'requesting', error: null, diagnostic: capturedSession.sessionId.slice(-6) });
+        const cleanup = await latestRef.current.purgeLocalSession({ capturedSession });
         if (cleanup.success) {
-          if (await appSessionService.completeEnd({ expectedSessionId: appSession.sessionId }) === false) return;
+          if (await appSessionService.completeEnd({ expectedSessionId: capturedSession.sessionId }) === false) return;
+          logoutContextRef.current = null;
           setLogoutStatus({ state: 'complete', error: null, diagnostic: null });
         } else {
           setLogoutStatus({
@@ -105,7 +126,7 @@ export default function useLogoutLifecycle({
       unsubscribe();
       if (appSessionListenerRef.current === unsubscribe) appSessionListenerRef.current = null;
     };
-  }, [appSession, disabled, logoutStatus.state, purgeLocalSession, sessionGenerationRef, setLogoutStatus, userUid]);
+  }, [appSession, appSessionRef, disabled, logoutContextRef, logoutStatus.state, sessionGenerationRef, setLogoutStatus, userUid]);
 
   return retryPendingLogout;
 }

@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { randomUUID } = require('node:crypto');
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
@@ -113,12 +115,12 @@ const acquireAccountDeletionReservationLock = async ({ db, deletionId, owner, no
 const releaseAccountDeletionReservationLock = async ({ ref, owner }) => {
   if (!ref) return false;
   let released = false;
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     if (current?.owner !== owner) return undefined;
     released = true;
     return null;
-  }, undefined, false);
-  return Boolean(released && result?.committed);
+  });
+  return Boolean(released && result?.applied);
 };
 
 const waitForIdempotentAccountDeletionReservation = async ({
@@ -409,7 +411,7 @@ const getAccountDeletionStatus = onRequest({
 const retryAccountDeletionJob = async ({ db, deletionId, nowMs = Date.now() }) => {
   const ref = db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`);
   let outcome = 'unavailable';
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     if (!current) return undefined;
     if (current.status === 'completed') {
       outcome = 'completed';
@@ -434,7 +436,8 @@ const retryAccountDeletionJob = async ({ db, deletionId, nowMs = Date.now() }) =
       retryRequestedAtMs: nowMs,
       lease: null,
     };
-  }, undefined, false);
+  });
+  if (!result?.applied) outcome = 'unavailable';
   const job = result?.snapshot?.val?.() || null;
   if (!job) {
     const completion = (await db.ref(
@@ -445,10 +448,10 @@ const retryAccountDeletionJob = async ({ db, deletionId, nowMs = Date.now() }) =
   if (outcome === 'queued') {
     await repairAccountDeletionRetryQueues({ db, nowMs, limit: 20 });
     if (job?.privateScope?.authUid) {
-      await db.ref(`${ACCOUNT_DELETION_ACTIVE_ROOT}/${job.privateScope.authUid}`).transaction((active) => {
+      await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_ACTIVE_ROOT}/${job.privateScope.authUid}`), (active) => {
         if (!active || active.deletionId !== deletionId) return undefined;
         return { ...active, status: 'pending', updatedAtMs: nowMs };
-      }, undefined, false);
+      });
     }
   }
   return { outcome, job };

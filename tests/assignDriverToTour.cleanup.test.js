@@ -19,7 +19,7 @@ const CURRENT_SESSION = {
 const UPDATED_SESSION = { ...CURRENT_SESSION, tourId: '6000A_1', sessionRevision: 2 };
 const createSessionApi = () => ({
   readSession: async () => CURRENT_SESSION,
-  persistSession: async (session) => session,
+  persistSession: async () => { throw new Error('HTTP result must reconcile with the application before persistence'); },
 });
 
 const loadService = ({ currentUser = { uid: 'driver-auth-1', getIdToken: async () => 'driver-id-token' } } = {}) => {
@@ -98,6 +98,7 @@ test('assignDriverToTour uses the authenticated server endpoint and returns cano
         tourCode: '6000A 1',
         previousTourId: '5112D_8',
         session: UPDATED_SESSION,
+        authUid: 'driver-auth-1',
       });
     } finally {
       global.fetch = originalFetch;
@@ -123,6 +124,22 @@ test('assignDriverToTour maps an occupied tour to dispatch-safe user copy', asyn
     } finally {
       global.fetch = originalFetch;
     }
+  });
+});
+
+test('an assignment response from an installation replaced during HTTP cannot reconcile or persist', async () => {
+  await withAssignmentEnvironment(async () => {
+    const originalFetch = global.fetch;
+    try {
+      const service = loadService();
+      global.fetch = async () => {
+        require(FIREBASE_PATH).auth.currentUser = { uid: 'replacement-installation', getIdToken: async () => 'new-token' };
+        return { ok: true, status: 200, json: async () => ({ success: true,
+          tourId: '6000A_1', tourCode: '6000A 1', previousTourId: '5112D_8', session: UPDATED_SESSION }) };
+      };
+      await assert.rejects(service.assignDriverToTour('D-BONDY', '6000A 1', { appSessionService: createSessionApi() }),
+        /installation changed/);
+    } finally { global.fetch = originalFetch; }
   });
 });
 

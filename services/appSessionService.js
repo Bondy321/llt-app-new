@@ -1,12 +1,14 @@
 const NativeAsyncStorage = require('@react-native-async-storage/async-storage').default;
 const { projectValidatedAppSession } = require('../src/app/session/appSessionBoundary');
 const { parseValidatedJson } = require('../src/shared/persistence/jsonBoundary');
+const { classifySessionTransition } = require('./appSessionTransition');
 
 const testStorageValues = new Map();
 const testStorage = {
   getItem: async (key) => testStorageValues.get(key) ?? null,
   setItem: async (key, value) => { testStorageValues.set(key, value); },
   removeItem: async (key) => { testStorageValues.delete(key); },
+  multiSet: async (entries) => { entries.forEach(([key, value]) => testStorageValues.set(key, value)); },
   multiRemove: async (keys) => { keys.forEach((key) => testStorageValues.delete(key)); },
 };
 const AsyncStorage = process.env.NODE_ENV === 'test' ? testStorage : NativeAsyncStorage;
@@ -152,6 +154,27 @@ const createAppSessionService = ({
 
   const clearSession = () => mutateStorage(() => storage.removeItem(APP_SESSION_KEY));
 
+  // Commit the validated session and its display seed together, in the same
+  // serialized adapter used by login/logout. A delayed assignment may neither
+  // replace a newer revision nor recreate a session removed by logout.
+  const persistSessionTransition = ({ expectedSession, session, projectionEntries, isCurrent }) => mutateStorage(async () => {
+    const next = validateAppSession(session, { nowMs: now() });
+    const stored = parseValidatedJson(await storage.getItem(APP_SESSION_KEY), validateAppSession,
+      { nowMs: now(), allowExpired: true });
+    if (!next || !stored || !isCurrent()
+      || !['advance', 'duplicate'].includes(classifySessionTransition(expectedSession, next, { allowDriverAssignment: true }))
+      || !['advance', 'duplicate'].includes(classifySessionTransition(stored, next, { allowDriverAssignment: true }))) return false;
+    await storage.multiSet([...projectionEntries, [APP_SESSION_KEY, JSON.stringify(next)]]);
+    return true;
+  });
+
+  const persistProjection = ({ expectedSession, entries, isCurrent }) => mutateStorage(async () => {
+    const stored = parseValidatedJson(await storage.getItem(APP_SESSION_KEY), validateAppSession, { nowMs: now() });
+    if (!stored || !isCurrent() || classifySessionTransition(expectedSession, stored) !== 'duplicate') return false;
+    await storage.multiSet(entries);
+    return true;
+  });
+
   const persistPendingEnd = async ({ authUid, session }) => {
     const validSession = validateAppSession(session, { nowMs: now(), allowExpired: true });
     if (!validSession || !isSafeKey(authUid)) throw new Error('A valid session is required to request logout.');
@@ -243,13 +266,19 @@ const createAppSessionService = ({
     return true;
   });
 
-  const verifyCurrent = async ({ authUid, expectedSession, readRemoteSession } = {}) => {
+  const verifyCurrent = async ({ authUid, expectedSession, readRemoteSession, allowDriverAssignment = false } = {}) => {
     if (!isSafeKey(authUid) || !expectedSession) return { valid: false, reason: 'INVALID_INPUT' };
     const raw = readRemoteSession
       ? await readRemoteSession(authUid)
       : (await getFirebase().realtimeDb.ref(`app_sessions/${authUid}`).once('value')).val();
     const remote = validateAppSession(raw, { nowMs: now() });
-    if (!remote) return { valid: false, reason: 'SESSION_INACTIVE' };
+    if (!remote || (raw.authUid && raw.authUid !== authUid)) return { valid: false, reason: 'SESSION_INACTIVE' };
+    if (allowDriverAssignment) {
+      const transition = classifySessionTransition(expectedSession, remote, { allowDriverAssignment: true });
+      return transition === 'invalid' || transition === 'stale'
+        ? { valid: false, reason: 'SESSION_CHANGED', session: remote }
+        : { valid: true, session: remote };
+    }
     if (remote.sessionId !== expectedSession.sessionId
       || remote.principalId !== expectedSession.principalId
       || remote.principalType !== expectedSession.principalType
@@ -259,13 +288,14 @@ const createAppSessionService = ({
     return { valid: true, session: remote };
   };
 
-  const subscribe = ({ authUid, expectedSession, onRevoked, onError, subscribeToForeground }) => {
+  const subscribe = ({ authUid, expectedSession, onSession, onRevoked, onError, subscribeToForeground }) => {
     if (!isSafeKey(authUid) || !expectedSession) return () => {};
     const firebase = getFirebase();
     const ref = firebase.realtimeDb.ref(`app_sessions/${authUid}`);
     let active = true;
     let notified = false;
     let expiryTimer = null;
+    let acceptedSession = expectedSession;
     const clearExpiryTimer = () => {
       if (expiryTimer !== null) cancelTimer(expiryTimer);
       expiryTimer = null;
@@ -279,7 +309,7 @@ const createAppSessionService = ({
     const checkExpiry = () => {
       clearExpiryTimer();
       if (!active || notified) return;
-      const remaining = expectedSession.expiresAtMs - now();
+      const remaining = acceptedSession.expiresAtMs - now();
       if (!Number.isFinite(remaining) || remaining <= 0) {
         revoke('SESSION_EXPIRED');
         return;
@@ -288,14 +318,28 @@ const createAppSessionService = ({
     };
     const onValue = (snapshot) => {
       if (!active || notified) return;
-      const remote = validateAppSession(snapshot.val(), { nowMs: now() });
-      if (!remote
-        || remote.sessionId !== expectedSession.sessionId
-        || remote.principalId !== expectedSession.principalId
-        || remote.principalType !== expectedSession.principalType
-        || remote.tourId !== expectedSession.tourId) {
-        revoke(remote ? 'SESSION_CHANGED' : 'SESSION_ENDED');
+      const raw = snapshot.val();
+      const remote = validateAppSession(raw, { nowMs: now(), allowExpired: true });
+      if (!remote || (raw.authUid && raw.authUid !== authUid)) { revoke('SESSION_ENDED'); return; }
+      const transition = classifySessionTransition(acceptedSession, remote, { allowDriverAssignment: Boolean(onSession) });
+      if (transition === 'invalid') { revoke('SESSION_CHANGED'); return; }
+      if (transition === 'stale') return;
+      if (remote.expiresAtMs <= now()) { revoke('SESSION_EXPIRED'); return; }
+      if (transition === 'duplicate') {
+        // A previous projection load may have failed while offline. Replaying
+        // this same authority can repair its seed, without lowering revision.
+        Promise.resolve(onSession?.({ authUid, session: acceptedSession }))
+          .catch(error => { if (active && !notified) onError?.(error); });
+        return;
       }
+      const previousSession = acceptedSession;
+      acceptedSession = remote;
+      checkExpiry();
+      // The accepted expiry is effective immediately, even if tour loading or
+      // storage reconciliation is still awaiting I/O.
+      Promise.resolve(onSession?.({ authUid, session: remote, previousSession })).catch(error => {
+        if (active && !notified) onError?.(error);
+      });
     };
     const cancelled = (error) => { if (active) onError?.(error); };
     const stopForeground = subscribeToForeground?.(checkExpiry);
@@ -311,6 +355,8 @@ const createAppSessionService = ({
 
   return {
     persistSession,
+    persistSessionTransition,
+    persistProjection,
     readSession,
     clearSession,
     persistPendingEnd,

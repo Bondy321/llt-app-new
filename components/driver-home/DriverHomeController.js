@@ -371,7 +371,10 @@ export default function DriverHomeController({ driverData, locationSessionScope 
       });
 
       if (onDriverAssignmentChange && sanitizedTourId) {
-        await onDriverAssignmentChange({ assignedTourId: sanitizedTourId });
+        const reconciled = await onDriverAssignmentChange({ assignedTourId: sanitizedTourId, session: result.session, authUid: result.authUid });
+        setJoinModalVisible(false);
+        setInputTourCode('');
+        if (reconciled?.ignored) return;
         logger.info('DriverHomeScreen', 'Driver assignment persisted to session', {
           driverId: maskIdentifier(driverId),
           sanitizedTourId,
@@ -383,6 +386,7 @@ export default function DriverHomeController({ driverData, locationSessionScope 
           readDriverLocation(sanitizedTourId),
           offlineSyncService.getTourPackMeta(sanitizedTourId, 'driver', { ownerId: driverData?.id }),
         ]);
+        if (activeTourIdRef.current !== sanitizedTourId || driverIdRef.current !== driverId) return;
 
         if (locationSnapshot.exists()) {
           setLastLocationUpdate(locationSnapshot.val());

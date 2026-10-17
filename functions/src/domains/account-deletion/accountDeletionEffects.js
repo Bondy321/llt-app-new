@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { deleteOwnedGroupPhotoRecord, deleteOwnedPrivatePhotoRecord } = require('../media/public');
 const {
@@ -42,26 +44,22 @@ const releaseOwnedPassengerAuthority = async ({ db, scope, leaseGuard = null }) 
   for (const [path, expected] of ownedLeaves) {
     if (leaseGuard) await assertCurrentJobLease(leaseGuard);
     let removed = false;
-    const result = await db.ref(path).transaction((current) => {
+    const result = await transactExistingRecord(db.ref(path), (current) => {
       removed = current === expected;
-      // A cold Admin SDK cache can present null before the server value. A null
-      // no-op permits the server compare/retry instead of aborting prematurely.
-      if (current === null) return null;
       return removed ? null : undefined;
-    }, undefined, false);
-    recordsRemoved += Number(result?.committed === true && removed);
+    });
+    recordsRemoved += Number(result?.applied === true && removed);
   }
   return recordsRemoved;
 };
 
 const releaseOwnedDriverAuthority = async ({ db, scope, leaseGuard = null }) => {
   if (leaseGuard) await assertCurrentJobLease(leaseGuard);
-  const result = await db.ref(`drivers/${scope.driverId}/authUid`).transaction(
+  const result = await transactExistingRecord(
+    db.ref(`drivers/${scope.driverId}/authUid`),
     (current) => current === scope.authUid ? null : undefined,
-    undefined,
-    false,
   );
-  return Number(result?.committed === true);
+  return Number(result?.applied === true);
 };
 
 const deleteGroupMediaPage = async ({ db, bucket, scope, cursor, lease }) => {
@@ -337,16 +335,16 @@ const deleteUidAccountRecords = async ({ db, scope, leaseGuard = null }) => {
   if (leaseGuard) await assertCurrentJobLease(leaseGuard);
   await db.ref().update(updates);
   if (leaseGuard) await assertCurrentJobLease(leaseGuard);
-  const roleClaim = await db.ref(`app_session_role_claim_jobs/v1/${scope.authUid}`).transaction((current) => (
+  const roleClaim = await transactExistingRecord(db.ref(`app_session_role_claim_jobs/v1/${scope.authUid}`), (current) => (
     current?.appSessionId === scope.expectedSessionId ? null : undefined
-  ), undefined, false);
+  ));
   if (leaseGuard) await assertCurrentJobLease(leaseGuard);
-  const policyCleanup = await db.ref(`driver_login_policy_cleanup/v1/${scope.authUid}`).transaction((current) => (
+  const policyCleanup = await transactExistingRecord(db.ref(`driver_login_policy_cleanup/v1/${scope.authUid}`), (current) => (
     current?.sessionId === scope.expectedSessionId ? null : undefined
-  ), undefined, false);
+  ));
   return Object.keys(updates).length
-    + Number(roleClaim?.committed === true)
-    + Number(policyCleanup?.committed === true);
+    + Number(roleClaim?.applied === true)
+    + Number(policyCleanup?.applied === true);
 };
 
 module.exports = {

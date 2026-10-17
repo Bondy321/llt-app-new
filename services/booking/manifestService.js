@@ -382,6 +382,7 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
       });
       throw new Error('You must be logged in to assign a tour');
     }
+    const assignmentAuthUid = currentUser.uid;
     const endpoint = buildDriverAssignmentEndpointUrl();
     if (!endpoint) {
       throw new Error('The assignment service is not configured. Please update the app or contact dispatch.');
@@ -432,6 +433,9 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
     if (!response.ok || payload.success !== true) {
       throw new Error(mapDriverAssignmentReason(payload.reason));
     }
+    if (auth.currentUser?.uid !== assignmentAuthUid) {
+      throw new Error('Your installation changed while assigning the tour. Sign in again.');
+    }
 
     logBookingEvent('info', 'Driver assignment completed', {
       driverId: maskIdentifier(validatedDriverId),
@@ -440,11 +444,16 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
     });
     const updatedSession = validateAppSession(payload.session);
     if (!updatedSession || updatedSession.sessionId !== currentAppSession.sessionId
+      || updatedSession.principalId !== currentAppSession.principalId
+      || updatedSession.driverId !== currentAppSession.driverId
+      || updatedSession.principalType !== 'driver'
+      || updatedSession.issuedAtMs !== currentAppSession.issuedAtMs
       || updatedSession.sessionRevision <= currentAppSession.sessionRevision
       || updatedSession.tourId !== payload.tourId) {
       throw new Error('The assignment completed but its secure session response was invalid. Sign in again.');
     }
-    await appSessionService.persistSession(updatedSession);
+    // The application reconciles realtime and HTTP responses together. Eagerly
+    // persisting here can restore an older tour after a newer listener revision.
 
     return {
       success: true,
@@ -452,6 +461,7 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
       tourCode: payload.tourCode || validatedTourCode,
       previousTourId: payload.previousTourId || null,
       session: updatedSession,
+      authUid: assignmentAuthUid,
     };
 
   } catch (error) {

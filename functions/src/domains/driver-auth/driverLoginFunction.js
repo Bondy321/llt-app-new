@@ -20,12 +20,11 @@ const {
   releaseDriverAssignmentLoginAdmission,
   resolveDriverAssignment,
 } = require('../driver-assignment/public');
-const { resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { authorizeDriverLoginSecurity } = require('./driverLoginSecurity');
 const {
   acquireDriverLoginAdmission,
   completeDriverLoginAdmission,
-  driverBindingAllowedByPolicy,
+  driverLoginClaimAllowedByPolicy,
   ensureDriverLoginPolicy,
   readDriverLoginPolicy,
   hashPolicyIdentifier,
@@ -53,8 +52,7 @@ const loadAuthorizedDriver = async ({ db, driverId, authUid, policy }) => {
     return { allowed: false, status: 200, reason: 'DRIVER_NOT_FOUND' };
   }
   const driverData = driverSnapshot.val() || {};
-  const claimedAuthUid = resolveTrimmedString(driverData.authUid);
-  if (!driverBindingAllowedByPolicy({ policy, authUid, claimedAuthUid })) {
+  if (!driverLoginClaimAllowedByPolicy({ policy, authUid, claimedAuthUid: driverData.authUid })) {
     log.warn('Driver login rejected: driver code already linked to another auth uid', {
       driverId, authUidHash: hashPolicyIdentifier(authUid),
     });
@@ -98,6 +96,7 @@ const verifyDriverLogin = onRequestWithResult(
   {
     region: 'europe-west1',
     maxInstances: 10,
+    timeoutSeconds: 60,
   },
   async (/** @type {any} */ req, /** @type {any} */ res) => {
     if (req.method !== 'POST') {
@@ -166,8 +165,7 @@ const verifyDriverLogin = onRequestWithResult(
           return res.status(409).json({ valid: false, reason: 'DRIVER_LOGIN_IN_PROGRESS' });
         }
         const latestDriver = (await db.ref(`drivers/${driverId}`).once('value')).val() || {};
-        const currentClaim = resolveTrimmedString(latestDriver.authUid);
-        if (currentClaim && currentClaim !== requestAuth.uid) {
+        if (!driverLoginClaimAllowedByPolicy({ policy, authUid: requestAuth.uid, claimedAuthUid: latestDriver.authUid })) {
           return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
         }
       }

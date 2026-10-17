@@ -186,7 +186,7 @@ const stopAuthorityState = () => ({
     revision: 1, updatedAtMs: 1000, transitionPhase: 'stable' } },
 });
 const stop = (db, input = stopIntent(), options = {}) => performDriverTrackingStop({
-  db, authUid: 'uid-a', input, nowMs: STOP_NOW, reconcileProjection: async () => {}, ...options,
+  db, authUid: 'uid-a', input, nowMs: STOP_NOW, clock: () => STOP_NOW, reconcileProjection: async () => {}, ...options,
 });
 
 test('stop API parser requires exact stopped schema and rejects unsafe ownership path segments', () => {

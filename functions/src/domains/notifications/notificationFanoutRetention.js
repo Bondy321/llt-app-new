@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { removeClaimedQueueEntry, releaseClaimedQueueEntry } = require('./notificationQueues');
 const { finalizeCompletedFanout } = require('./notificationFanoutFinalization');
 const {
@@ -21,7 +23,7 @@ const renewNotificationJobSubmissionFence = async ({
 }) => {
   if (!leaseOwnerId) return true;
   let renewed = false;
-  const result = await jobRef.transaction((current) => {
+  const result = await transactExistingRecord(jobRef, (current) => {
     if (!current || (requiredStatus && current.status !== requiredStatus)
       || isNotificationLifecycleRetentionFenced(current, nowMs)
       || current.status === 'privacy_deleted' || current.status === 'expired'
@@ -34,10 +36,10 @@ const renewNotificationJobSubmissionFence = async ({
       lease: { ...current.lease, expiresAtMs: nowMs + ttlMs },
     };
   });
-  return Boolean(renewed && result?.committed);
+  return Boolean(renewed && result?.applied);
 };
 
-const clearCompletedFanoutPointer = (jobRef, queueKey, nowMs) => jobRef.transaction((current) => {
+const clearCompletedFanoutPointer = (jobRef, queueKey, nowMs) => transactExistingRecord(jobRef, (current) => {
   if (!current || current.queueKey !== queueKey || !current.fanoutCompletedAtMs
     || isNotificationLifecycleRetentionFenced(current, nowMs)) return undefined;
   return { ...current, queueKind: null, queueKey: null, queueVersion: Number(current.queueVersion || 0) + 1 };

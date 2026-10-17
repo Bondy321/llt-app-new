@@ -1,4 +1,5 @@
 import { endNotificationDeviceSession } from '../../../services/notifications/notificationDeviceApiService';
+import { sameSessionIdentity } from '../../../services/appSessionTransition';
 
 export const runClearSessionState = async ({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, {
   includeNotificationOnboarding = false
@@ -30,20 +31,36 @@ export const runClearSessionState = async ({ SESSION_KEYS, SessionStorage, logge
     }
   };
 
-export const runPurgeLocalSession = async ({ appSession, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, purgeDriverTracking, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, {
+export const runPurgeLocalSession = async ({ appSession, appSessionRef, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, logoutContextRef, purgeDriverTracking, settleDriverAssignmentRetirement, previousDriverOperationalScopeRef, setAppSession, setDriverSessionGeneration, tourData, user }, {
   capturedSession = appSession,
+  capturedContext = logoutContextRef?.current,
 } = {}) => {
+    const matchingContext = capturedContext?.appSession?.sessionId === capturedSession?.sessionId ? capturedContext : {};
+    const context = { authUid: user?.uid || auth?.currentUser?.uid || null,
+      bookingData, tourData, driverOperationalScope: currentDriverLifecycleScope,
+      ...matchingContext, appSession: capturedSession };
+    const ownsCleanup = () => {
+      const currentUid = auth?.currentUser?.uid || user?.uid || null;
+      const currentSession = appSessionRef?.current;
+      return (!currentUid || currentUid === context.authUid)
+        && (!currentSession || sameSessionIdentity(currentSession, capturedSession));
+    };
+    const changed = () => ({ success: false,
+      failures: [{ name: 'validateCleanupOwner', error: 'LOCAL_SESSION_CHANGED' }] });
+    if (!ownsCleanup()) return changed();
+    if (logoutContextRef) logoutContextRef.current = context;
+    // Retire captured old-tour caches before ordinary logout completes or a
+    // later login can write a new operational seed into those same local keys.
+    try { await settleDriverAssignmentRetirement?.(); }
+    catch { return { success: false, failures: [{ name: 'retireDriverAssignment', error: 'OLD_TOUR_CLEANUP_PENDING' }] }; }
+    if (!ownsCleanup()) return changed();
     if (purgeDriverTracking) {
-      try { await purgeDriverTracking({ authUid: user?.uid || auth?.currentUser?.uid, sessionId: capturedSession?.sessionId }); }
+      try { await purgeDriverTracking({ authUid: context.authUid, sessionId: capturedSession?.sessionId }); }
       catch { return { success: false, failures: [{ name: 'stopDriverTracking', error: 'LOCAL_TRACKING_STOP_FAILED' }] }; }
     }
-    const result = await localSessionCleanupService.cleanup({
-      authUid: user?.uid || auth?.currentUser?.uid || null,
-      appSession: capturedSession,
-      bookingData,
-      tourData,
-      driverOperationalScope: currentDriverLifecycleScope,
-    });
+    if (!ownsCleanup()) return changed();
+    const result = await localSessionCleanupService.cleanup(context);
+    if (!ownsCleanup()) return changed();
     previousDriverOperationalScopeRef.current = null;
     driverLifecyclePurgeRef.current = null;
     setDriverSessionGeneration((value) => value + 1);

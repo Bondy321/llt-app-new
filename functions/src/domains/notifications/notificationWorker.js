@@ -2,13 +2,15 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { createHash, randomUUID } = require('node:crypto');
 const { onValueWritten } = require('firebase-functions/v2/database');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { log } = require('../../infrastructure/logging/safeLogger');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
-const { acquireNotificationJobLease, calculateRetryDelayMs } = require('./notificationJobs');
+const { acquireNotificationJobLease, calculateRetryDelayMs, ensureNotificationFanoutQueue } = require('./notificationJobs');
 const { enumerateNotificationAudiencePage } = require('./notificationAudienceEnumerators');
 const { createNotificationAudiencePreparation } = require('./notificationAudiencePreparation');
 const { buildAttemptCountDeltaUpdates } = require('./notificationAttemptCounts');
@@ -20,7 +22,7 @@ const {
   settleCompletedFanoutQueue,
 } = require('./notificationFanoutRetention');
 const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
-const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
+const { QUEUE_ROOTS, buildNotificationQueueKey, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
   removeClaimedQueueEntry, transitionQueuedRecord } = require('./notificationQueues');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 const { createNotificationRetrySubmission } = require('./notificationRetrySubmission');
@@ -181,12 +183,13 @@ const commitNotificationAudiencePage = async (jobRef, {
 }) => {
   let committed = false;
   // eslint-disable-next-line complexity -- one transaction owns the complete page state machine
-  const transaction = await jobRef.transaction((current) => {
+  const transaction = await transactExistingRecord(jobRef, (current) => {
     if (!current) return;
     if (isNotificationLifecycleRetentionFenced(current, nowMs)) return;
     if ((current.afterRecipientId || null) !== (expectedCursor || null)) return;
     if (current.lastCommittedPageId === pageId) return;
-    if (leaseOwnerId && current.lease?.ownerId !== leaseOwnerId) return;
+    if (leaseOwnerId && (current.lease?.ownerId !== leaseOwnerId
+      || Number(current.lease?.expiresAtMs || 0) <= nowMs)) return;
     const counts = { ...(current.counts || {}) };
     Object.entries(increments).forEach(([key, value]) => {
       counts[key] = Number(counts[key] || 0) + Number(value || 0);
@@ -218,7 +221,7 @@ const commitNotificationAudiencePage = async (jobRef, {
       updatedAtMs: nowMs,
     };
   });
-  return { committed: Boolean(committed && transaction?.committed), job: transaction?.snapshot?.val?.() || null };
+  return { committed: Boolean(committed && transaction?.applied), job: transaction?.snapshot?.val?.() || null };
 };
 
 /** @param {any} db @param {any} recipient @param {string} reason @param {number} nowMs */
@@ -419,6 +422,13 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
   return { status: latest.status, fanoutComplete: true, increments, skipReasons };
 };
 
+const canRecoverFailedNotificationPage = (current, leased, leaseOwnerId, nowMs) => (
+  current.lease?.ownerId === leaseOwnerId && Number(current.lease?.expiresAtMs || 0) > nowMs
+  && !isNotificationLifecycleRetentionFenced(current, nowMs)
+  && (current.afterRecipientId || null) === (leased.afterRecipientId || null)
+  && current.lastCommittedPageId === leased.lastCommittedPageId
+);
+
 /** @param {{ db?: any, jobId: string, nowMs?: number, expo?: any, queueKey?: string, queueVersion?: number, queueOwnerId?: string, queueLeaseExpiresAtMs?: number, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
 // eslint-disable-next-line complexity -- lease recovery and durable rescheduling must remain one worker transaction boundary
 const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now(), expo, queueKey, queueVersion, queueOwnerId, queueLeaseExpiresAtMs, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning }) => {
@@ -432,6 +442,9 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     return { acquired: false, status: 'retention_fenced' };
   }
   if (queueKey && (!before || before.queueKey !== queueKey || Number(before.queueVersion) !== Number(queueVersion))) {
+    // A failure CAS can commit before publishing its replacement queue leaf.
+    // The retained old pointer is the durable continuation for this handoff.
+    if (before) await ensureNotificationFanoutQueue(db, before);
     if (queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
     return { acquired: false, status: 'stale_queue' };
   }
@@ -517,35 +530,22 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     const nextAttempt = Number(lease.job.attemptCount || 0) + 1;
     const expired = nextAttempt >= Number(lease.job.maxAttempts || 8) || Number(lease.job.expiresAtMs) <= nowMs;
     const dueAtMs = expired ? nowMs : nowMs + calculateRetryDelayMs(nextAttempt, lease.job.priorityClass);
-    if (queueRef && queueOwnerId) {
-      await jobRef.transaction((current) => {
-        if (!current || current.lease?.ownerId !== leaseOwnerId) return;
-        return {
-          ...current,
-          status: expired ? 'expired' : 'queued',
-          attemptCount: nextAttempt,
-          availableAtMs: dueAtMs,
-          lease: null,
-          ...(expired ? { completedAtMs: Number(current.completedAtMs || nowMs) } : {}),
-          lastErrorCode: String(error?.code || 'WORKER_FAILED').slice(0, 80),
-          updatedAtMs: nowMs,
-        };
-      });
-      if (expired) {
-        const terminalJob = (await jobRef.once('value')).val() || observed;
-        await finalizeAndScheduleCompletedFanout(db, terminalJob, nowMs, syncSourceStatus, publishCriticalWarning);
-        await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
-      } else {
-        const queuedJob = (await jobRef.once('value')).val() || observed;
-        await transitionQueuedRecord(db, {
-          targetPath: `notification_jobs/${jobId}`, current: queuedJob, patch: {},
-          queueKind: 'fanout', dueAtMs, targetId: jobId,
-        });
-      }
-    } else {
-      const current = (await jobRef.once('value')).val() || lease.job;
-      await transitionQueuedRecord(db, { targetPath: `notification_jobs/${jobId}`, current, patch: { status: expired ? 'expired' : 'queued', attemptCount: nextAttempt, availableAtMs: dueAtMs, lease: null, ...(expired ? { completedAtMs: Number(current.completedAtMs || nowMs) } : {}), lastErrorCode: String(error?.code || 'WORKER_FAILED').slice(0, 80), updatedAtMs: nowMs }, queueKind: expired ? null : 'fanout', dueAtMs, targetId: jobId });
-    }
+    const failure = await transactExistingRecord(jobRef, (current) => {
+      if (!canRecoverFailedNotificationPage(current, lease.job, leaseOwnerId, nowMs)) return undefined;
+      const queueVersion = Number(current.queueVersion || 0) + 1;
+      return { ...current, status: expired ? 'expired' : 'queued', attemptCount: nextAttempt,
+        availableAtMs: dueAtMs, lease: null, queueKind: expired ? null : 'fanout', queueVersion,
+        queueKey: expired ? null : buildNotificationQueueKey(dueAtMs, jobId, queueVersion),
+        ...(expired ? { completedAtMs: Number(current.completedAtMs || nowMs) } : {}),
+        lastErrorCode: String(error?.code || 'WORKER_FAILED').slice(0, 80), updatedAtMs: nowMs };
+    });
+    if (!failure.applied) return { acquired: false, status: 'lease_lost' };
+    // The job CAS owns the state and pointer revision. Publishing only its queue
+    // leaf cannot rewrite a successor; stale/orphan pointers fail version checks.
+    const failedJob = failure.snapshot.val();
+    if (expired) await finalizeAndScheduleCompletedFanout(db, failedJob, nowMs, syncSourceStatus, publishCriticalWarning);
+    else await ensureNotificationFanoutQueue(db, failedJob);
+    if (queueRef && queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
     const latest = (await jobRef.once('value')).val();
     if (latest) await syncSourceStatus(db, latest, nowMs);
     if (expired && lease.job.priorityClass === 'critical') await db.ref(`notification_delivery_warnings/${jobId}`).update({ jobId, tourId: lease.job.tourId || null, eventId: lease.job.eventId || null, severity: 'critical', code: 'EXPIRED', status: 'open', updatedAtMs: nowMs });

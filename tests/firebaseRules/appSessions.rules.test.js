@@ -626,6 +626,23 @@ for (const scenario of [
   });
 }
 
+test('server-owned profile session fence survives client leaf and parent writes', async () => {
+  const markerPath = `users/${AUTH_UID}/appSessionId`;
+  await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(markerPath).set(SESSION_ID));
+  const owner = dbFor(AUTH_UID);
+  const primaryAdmin = dbFor(ADMIN_UID);
+  await assertFails(owner.ref(markerPath).set(`sess_v1_${'f'.repeat(32)}`));
+  await assertFails(owner.ref(markerPath).remove());
+  await assertFails(primaryAdmin.ref(`users/${AUTH_UID}`).update({ appSessionId: null }));
+  await assertFails(primaryAdmin.ref(`users/${AUTH_UID}`).update({ appSessionId: `sess_v1_${'f'.repeat(32)}` }));
+  await assertSucceeds(owner.ref(`users/${AUTH_UID}/pushPermissionState`).set('denied'));
+  assert.equal((await owner.ref(markerPath).get()).val(), SESSION_ID);
+  // Existing compatibility whole-profile deletion is intentionally preserved;
+  // removing the profile grants no authority and cannot recreate the marker.
+  await assertSucceeds(owner.ref(`users/${AUTH_UID}`).remove());
+  await assertFails(owner.ref(markerPath).set(SESSION_ID));
+});
+
 test('driver-to-passenger transition denies delete holes and driver-attributed writes', async () => {
   await replaceDriverSessionWithPassenger();
   const db = dbFor(DRIVER_UID);

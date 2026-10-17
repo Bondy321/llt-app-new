@@ -122,6 +122,10 @@ const buildNotificationDeviceRecord = ({ authUid, input, existing, action, state
     operationalTourId: operational.operationalEligible ? operational.requestedTourId : null,
     operationalSessionId: operational.operationalEligible ? operational.requestedSessionId : null,
     operationalSessionRevision: operational.operationalEligible ? operational.requestedSessionRevision : null,
+    // Issuance owns this cleanup fence. A preferences/reconcile write must not
+    // erase it when an unassigned driver has no operational tour eligibility.
+    authoritySessionId: optionalString(existing.authoritySessionId, 80)
+      || (operational.operationalEligible ? operational.requestedSessionId : null),
     marketingEligible,
     marketingPreferences: state.marketingPreferences,
     marketingConsentVersion: 1,
@@ -288,7 +292,7 @@ const updateNotificationDevice = async ({ db = admin.database(), authUid, input,
   if (!DEVICE_ACTIONS.has(action)) return { status: 400, body: { success: false, reason: 'INVALID_ACTION' } };
   const ref = db.ref(`notification_devices/${authUid}`);
   const operationOwner = randomUUID();
-  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'cleanup', owner: operationOwner, nowMs });
+  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'notification_device', owner: operationOwner, nowMs });
   if (!sessionLock.acquired) return { status: 409, body: { success: false, reason: 'SESSION_IN_PROGRESS' } };
   let deviceLock = null;
   try {

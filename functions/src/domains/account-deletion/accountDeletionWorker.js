@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
@@ -65,7 +67,7 @@ const commitLeasedJobProgress = async ({
   privateScope = undefined, nowMs = Date.now(),
 }) => {
   let committed = false;
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     const checkedAtMs = typeof lease.clock === 'function' ? lease.clock() : nowMs;
     if (!jobLeaseMatches(current, lease) || current.phase !== expectedPhase
       || Number(current.lease?.expiresAtMs || 0) <= checkedAtMs) return undefined;
@@ -89,8 +91,8 @@ const commitLeasedJobProgress = async ({
       lease: null,
       ...(privateScope === undefined ? {} : { privateScope }),
     };
-  }, undefined, false);
-  return Boolean(committed && result?.committed);
+  });
+  return Boolean(committed && result?.applied);
 };
 
 // eslint-disable-next-line complexity -- explicit durable phase dispatch keeps every transition visible and auditable
@@ -309,7 +311,7 @@ const recordAccountDeletionFailure = async ({ db, ref, deletionId, lease, error,
     ? nowMs + (24 * 60 * 60 * 1000)
     : nowMs + calculateAccountDeletionRetryDelayMs(consecutiveFailureCount);
   let recorded = false;
-  const result = await ref.transaction((jobValue) => {
+  const result = await transactExistingRecord(ref, (jobValue) => {
     const transactionCheckedAtMs = typeof lease.clock === 'function' ? lease.clock() : nowMs;
     if (!jobLeaseMatches(jobValue, lease)
       || Number(jobValue.lease?.expiresAtMs || 0) <= transactionCheckedAtMs) return undefined;
@@ -328,24 +330,24 @@ const recordAccountDeletionFailure = async ({ db, ref, deletionId, lease, error,
       updatedAtMs: nowMs,
       lease: null,
     };
-  }, undefined, false);
-  if ((!recorded || !result?.committed) && createdWarning) {
-    await db.ref(`operations_terminal_warnings/v1/${createdWarning.warningId}`).transaction((warning) => {
+  });
+  if ((!recorded || !result?.applied) && createdWarning) {
+    await transactExistingRecord(db.ref(`operations_terminal_warnings/v1/${createdWarning.warningId}`), (warning) => {
       if (!warning || warning.warningId !== createdWarning.warningId
         || warning.status !== 'open'
         || warning.attemptCount !== createdWarning.attemptCount
         || warning.updatedAtMs !== createdWarning.updatedAtMs) return undefined;
       return null;
-    }, undefined, false);
+    });
   }
-  if (recorded && result?.committed && requiresAttention && current.privateScope?.authUid) {
-    await db.ref(`${ACCOUNT_DELETION_ACTIVE_ROOT}/${current.privateScope.authUid}`).transaction((active) => {
+  if (recorded && result?.applied && requiresAttention && current.privateScope?.authUid) {
+    await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_ACTIVE_ROOT}/${current.privateScope.authUid}`), (active) => {
       if (!active || active.deletionId !== deletionId) return undefined;
       return { ...active, status: 'requires_attention', updatedAtMs: nowMs };
-    }, undefined, false);
+    });
   }
   return {
-    recorded: Boolean(recorded && result?.committed),
+    recorded: Boolean(recorded && result?.applied),
     status: requiresAttention ? 'requires_attention' : 'pending',
     dueAtMs,
   };
@@ -398,6 +400,10 @@ const processAccountDeletionJob = async ({
     const result = await processLeasedAccountDeletionPhase({
       db, bucket, auth, deletionId, job: lease.job, lease: exactLease, nowMs,
     });
+    if (result === false) {
+      await releaseAccountDeletionQueueEntry({ ref: queue.ref, ownerId, dueAtMs: nowMs });
+      return { processed: false, reason: 'ACCOUNT_DELETION_LEASE_LOST' };
+    }
     if (lease.job.phase !== 'auth_delete') {
       await releaseAccountDeletionQueueEntry({ ref: queue.ref, ownerId, dueAtMs: nowMs });
     }
@@ -435,15 +441,15 @@ const repairAccountDeletionRetryQueues = async ({
     }, undefined, false);
     if (!queueResult?.committed) continue;
     let markerCleared = false;
-    await db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`).transaction((current) => {
+    const markerResult = await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`), (current) => {
       if (!current || current.status !== 'pending'
         || current.retryRequestedAtMs !== expected.retryRequestedAtMs) return undefined;
       markerCleared = true;
       const next = { ...current };
       delete next.retryRequestedAtMs;
       return next;
-    }, undefined, false);
-    repaired += Number(markerCleared);
+    });
+    repaired += Number(markerCleared && markerResult.applied);
   }
   return repaired;
 };
@@ -471,15 +477,15 @@ const cleanupCompletedAccountDeletionJobs = async ({
   for (const [deletionId, expected] of Object.entries(snapshot.val() || {})) {
     if (expected?.status !== 'completed' || expected.completionCleanup) continue;
     let matched = false;
-    const result = await db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`).transaction((current) => {
+    const result = await transactExistingRecord(db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`), (current) => {
       if (!current || current.status !== 'completed'
         || current.completionCleanup
         || current.completedAtMs !== expected.completedAtMs
         || Number(current.retainUntilMs || 0) > nowMs) return undefined;
       matched = true;
       return null;
-    }, undefined, false);
-    removed += Number(matched && result?.committed);
+    });
+    removed += Number(matched && result?.applied);
   }
   return removed;
 };

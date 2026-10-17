@@ -81,6 +81,22 @@ access:
    summary. For `retryable: false`, do not call retry or edit the job; repair the malformed invariant
    through the normal reviewed code/data process.
 
+Workers do not depend on a warm Realtime Database SDK cache. Existing-record transactions make a
+null no-op proposal to obtain the server comparison; they acknowledge a claim, progress commit or
+removal only when the final callback accepted an existing record under its exact owner, phase and
+revision predicates. A committed null no-op on a genuinely absent record is not acquired work.
+One-off due queries remain bounded and have no retained listener. This applies to manual retry,
+queue release, authority release, completion reconciliation and retained-job cleanup as well as the
+initial claim. Missing jobs are never manufactured to make a retry succeed.
+
+`tests/coldWorkers.emulator.test.js` seeds synthetic data on one real Admin connection and invokes
+each continuation through fresh named Admin apps. Its deletion scenario runs the complete lifecycle
+through Auth-last completion and verifies sibling authority, roster preservation, permanent UID and
+notification tombstones, and retirement of only the completed operation's barriers. The same suite
+checks notification fanout, temporary provider retry and receipt continuation. Run it through the
+normal local login-emulator gate with an explicit `demo-*` project; never use production to reproduce
+an alleged cache failure.
+
 At `auth_delete`, only the Auth UID, principal type and any hashed passenger barrier coordinate remain
 in private scope. Missing booking, tour, session, driver and actor fields are expected and must not be
 reconstructed from operational data.

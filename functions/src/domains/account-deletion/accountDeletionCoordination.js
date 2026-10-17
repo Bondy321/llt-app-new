@@ -2,6 +2,8 @@
 
 // @ts-check
 
+const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+
 const { randomUUID } = require('node:crypto');
 const {
   ACCOUNT_DELETION_ACTIVE_ROOT,
@@ -81,22 +83,21 @@ const renewPassengerAccountDeletionLock = async ({
   ttlMs = PASSENGER_ACCOUNT_DELETION_LOCK_TTL_MS,
 }) => {
   if (!lock?.ref || !lock.ownerId) return false;
-  const result = await lock.ref.transaction((current) => {
-    if (current === null) return null; // Let the server compare/retry a cold cache.
+  const result = await transactExistingRecord(lock.ref, (current) => {
     if (!current || current.ownerId !== lock.ownerId || Number(current.expiresAtMs || 0) <= nowMs) {
       return undefined;
     }
     return { ...current, expiresAtMs: nowMs + ttlMs };
-  }, undefined, false);
-  return Boolean(result?.committed && result.snapshot.val()?.ownerId === lock.ownerId);
+  });
+  return Boolean(result?.applied && result.snapshot.val()?.ownerId === lock.ownerId);
 };
 
 const releasePassengerAccountDeletionLock = async ({ lock }) => {
   if (!lock?.ref || !lock.ownerId) return false;
-  const result = await lock.ref.transaction((current) => (
-    current === null || current?.ownerId === lock.ownerId ? null : undefined
-  ), undefined, false);
-  return Boolean(result?.committed && !result.snapshot.exists());
+  const result = await transactExistingRecord(lock.ref, (current) => (
+    current.ownerId === lock.ownerId ? null : undefined
+  ));
+  return Boolean(result?.applied && !result.snapshot.exists());
 };
 
 const claimAccountDeletionQueueEntry = async ({
@@ -104,7 +105,7 @@ const claimAccountDeletionQueueEntry = async ({
 }) => {
   const ref = db.ref(`${ACCOUNT_DELETION_QUEUE_ROOT}/${deletionId}`);
   let claimed = false;
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     if (!current || Number(current.dueAtMs || 0) > nowMs) return undefined;
     if (current.lease && current.lease.ownerId !== ownerId
       && Number(current.lease.expiresAtMs || 0) > nowMs) return undefined;
@@ -113,9 +114,9 @@ const claimAccountDeletionQueueEntry = async ({
       ...current,
       lease: { ownerId, acquiredAtMs: nowMs, expiresAtMs: nowMs + leaseMs },
     };
-  }, undefined, false);
+  });
   return {
-    claimed: Boolean(claimed && result?.committed && result.snapshot.val()?.lease?.ownerId === ownerId),
+    claimed: Boolean(claimed && result?.applied && result.snapshot.val()?.lease?.ownerId === ownerId),
     ownerId,
     ref,
     entry: result?.snapshot?.val?.() || null,
@@ -127,7 +128,7 @@ const acquireAccountDeletionJobLease = async ({
 }) => {
   const ref = db.ref(`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`);
   let acquired = false;
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     if (!current || current.status === 'completed' || current.status === 'requires_attention'
       || Number(current.availableAtMs || 0) > nowMs) return undefined;
     if (current.lease && current.lease.ownerId !== ownerId
@@ -148,10 +149,10 @@ const acquireAccountDeletionJobLease = async ({
       },
       updatedAtMs: nowMs,
     };
-  }, undefined, false);
+  });
   const job = result?.snapshot?.val?.() || null;
   return {
-    acquired: Boolean(acquired && result?.committed && job?.lease?.ownerId === ownerId),
+    acquired: Boolean(acquired && result?.applied && job?.lease?.ownerId === ownerId),
     ref,
     job,
     revision: job?.leaseRevision || null,
@@ -161,7 +162,7 @@ const acquireAccountDeletionJobLease = async ({
 const releaseAccountDeletionQueueEntry = async ({ ref, ownerId, dueAtMs = null, remove = false }) => {
   if (!ref || !ownerId) return false;
   let released = false;
-  const result = await ref.transaction((current) => {
+  const result = await transactExistingRecord(ref, (current) => {
     if (!current || current.lease?.ownerId !== ownerId) return undefined;
     released = true;
     if (remove) return null;
@@ -170,8 +171,8 @@ const releaseAccountDeletionQueueEntry = async ({ ref, ownerId, dueAtMs = null, 
       ...(Number.isFinite(dueAtMs) ? { dueAtMs: Number(dueAtMs) } : {}),
       lease: null,
     };
-  }, undefined, false);
-  return Boolean(released && result?.committed);
+  });
+  return Boolean(released && result?.applied);
 };
 
 const jobLeaseMatches = (job, lease) => Boolean(job && lease

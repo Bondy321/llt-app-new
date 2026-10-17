@@ -10,6 +10,7 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 });
 
 const { __testables } = require('../functions/index.js');
+const { driverLoginClaimAllowedByPolicy } = require('../functions/src/domains/driver-auth/driverDevicePolicy');
 const {
   recordDriverPolicyCleanupFailure,
 } = require('../functions/src/domains/driver-auth/driverDevicePolicyFunctions');
@@ -59,6 +60,20 @@ test('binding is ignored only while policy is off and generation remains mandato
   }), true);
   assert.equal(__testables.driverSessionMatchesPolicyGeneration({ driverLoginPolicyGeneration: 3 }, off), true);
   assert.equal(__testables.driverSessionMatchesPolicyGeneration({ driverLoginPolicyGeneration: 3 }, on), false);
+});
+
+test('login-specific admission accepts an unclaimed driver without granting established binding authority', () => {
+  const policy = { enforceSingleDevice: true, generation: 4 };
+  for (const claimedAuthUid of [null, undefined, '', '   ', 'uid-first']) {
+    assert.equal(driverLoginClaimAllowedByPolicy({ policy, authUid: 'uid-first', claimedAuthUid }), true);
+  }
+  for (const claimedAuthUid of ['uid-other', {}, [], true, 123]) {
+    assert.equal(driverLoginClaimAllowedByPolicy({ policy, authUid: 'uid-first', claimedAuthUid }), false);
+  }
+  assert.equal(driverLoginClaimAllowedByPolicy({ policy, authUid: '' }), false);
+  assert.equal(__testables.driverBindingAllowedByPolicy({ policy, authUid: 'uid-first' }), false);
+  assert.equal(driverLoginClaimAllowedByPolicy({ policy: { enforceSingleDevice: false },
+    authUid: 'uid-other', claimedAuthUid: 'uid-first' }), true);
 });
 
 test('the first driver login materializes an explicit off policy without overwriting an existing policy', async () => {

@@ -246,6 +246,7 @@ const reconcileAfterPaginationRace = async (beforeFirstSessionLock) => {
       subjectSessionCursor: null,
     },
     nowMs: 5_000,
+    clock: () => 5_000,
     pageSize: 25,
   });
   return { result, state };
@@ -653,24 +654,16 @@ test('transition reservation and worker lease each admit exactly one concurrent 
 });
 
 test('assignment page session locks remain fenced past the function timeout', async () => {
-  let current = null;
-  const db = {
-    ref: () => ({
-      transaction: async (updater) => {
-        const next = updater(current);
-        if (next === undefined) return { committed: false, snapshot: { val: () => current } };
-        current = next;
-        return { committed: true, snapshot: { val: () => current } };
-      },
-    }),
-  };
+  const { db } = createAssignmentReconciliationRaceDb({ beforeFirstSessionLock() {} });
   assert.equal((await acquireAppSessionLock({
     db, authUid: 'uid-a', operation: 'assign', owner: 'worker-a', nowMs: 100,
     ttlMs: ASSIGNMENT_LOCK_TTL_MS,
+    clock: () => 100,
   })).acquired, true);
   assert.equal((await acquireAppSessionLock({
     db, authUid: 'uid-a', operation: 'assign', owner: 'worker-b', nowMs: 120_100,
     ttlMs: ASSIGNMENT_LOCK_TTL_MS,
+    clock: () => 120_100,
   })).acquired, false);
 });
 

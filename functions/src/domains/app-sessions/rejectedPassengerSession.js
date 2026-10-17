@@ -44,7 +44,8 @@ const retireRejectedPassengerSession = async ({
   if (current.sessionId !== session.sessionId) return { retired: false, cleanupPending: false };
   try {
     await cleanupSession({ db, session: current, expectedSessionId: session.sessionId,
-      eventType: 'rejected', reason: 'login_source_changed', actorType: 'system', nowMs: clock() });
+      eventType: 'rejected', reason: 'login_source_changed', actorType: 'system', nowMs: clock(),
+      clock, appSessionLock });
     return { retired: true, cleanupPending: false };
   } catch {
     return { retired: await invalidateExactSession({ db, session }), cleanupPending: true };

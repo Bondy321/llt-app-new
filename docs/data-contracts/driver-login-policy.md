@@ -41,6 +41,19 @@ the policy transaction. With enforcement off, unrelated drivers and two UIDs for
 the same driver may proceed concurrently. With enforcement on, a per-driver
 `driver_login_claim_reservations/{driverId}` transaction serialises the claim.
 
+Login admission uses `driverLoginClaimAllowedByPolicy`: an absent or blank claim
+may enter that reservation, the same UID may reverify, and a different non-empty
+UID is rejected when enforcement is enabled. Malformed claims fail closed.
+`driverBindingAllowedByPolicy` remains strict for established-authority consumers,
+including notification eligibility; admission is never itself operational authority.
+The handler checks the fresh driver again under the reservation and preserves
+policy generation, assignment, rate-limit and exact-owner rollback fences.
+
+Policy transition and admission transactions distinguish a cold SDK cache from a
+missing server record. A null proposal forces server comparison; the final
+callback outcome and materialised policy determine acquisition. Missing policy
+cannot manufacture an admission or bypass an expected positive revision.
+
 Turning enforcement on:
 
 1. transactionally changes the policy phase from `stable` to `draining`, which
@@ -77,8 +90,11 @@ denies direct client reads and writes.
 
 ## Release order
 
-This is a coordinated cutover: deploy the compatible Functions and strict policy
-rules in the approved backend window, verify the materialised policy, then deploy
-web admin and release the 1.0.5 mobile binary. Old driver-write clients do not
-satisfy the final session/policy requirements. This repository change performs no
-deployment.
+Deploy compatible Functions before the associated rules and mobile delivery.
+Wave 1 repairs do not require changing the live enforcement flag or advancing
+the policy generation; they preserve the existing transition protocol. Its
+1.0.7 mobile reconciliation change is JavaScript-only. See
+`../operations/wave1-reliability-2026-10-17.md` for the coordinated consumer
+inventory and verification record. Unsupported older driver-write clients still
+do not satisfy the session/policy requirements. A repository merge performs no
+Firebase deployment.

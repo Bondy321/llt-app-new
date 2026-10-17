@@ -17,6 +17,7 @@ const verifyPassengerLogin = onRequestWithResult(
   {
     region: 'europe-west1',
     maxInstances: 10,
+    timeoutSeconds: 60,
   },
   async (/** @type {any} */ req, /** @type {any} */ res) => {
     if (req.method !== 'POST') {

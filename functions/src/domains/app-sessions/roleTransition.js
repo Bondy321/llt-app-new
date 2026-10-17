@@ -147,6 +147,7 @@ const reconcilePassengerRoleClaimJob = async ({
   buildClaims,
   nowMs = Date.now(),
   existingAppSessionLock = null,
+  clock = Date.now,
 }) => {
   if (!db?.ref || !auth?.getUser || !auth?.setCustomUserClaims
     || !isValidFirebaseKey(authUid) || typeof buildClaims !== 'function') {
@@ -191,13 +192,14 @@ const reconcilePassengerRoleClaimJob = async ({
       ...existingAppSessionLock,
       acquired: existingAppSessionLock.acquired === true && Boolean(existingAppSessionLock.owner)
         && await renewAppSessionLock({ db, authUid, owner: existingAppSessionLock.owner,
-          nowMs, ttlMs: ROLE_TRANSITION_LOCK_TTL_MS }),
+          nowMs: clock(), clock, ttlMs: ROLE_TRANSITION_LOCK_TTL_MS }),
     } : await acquireAppSessionLock({
       db,
       authUid,
       operation: 'role_claim_cleanup',
       owner: claimOwner,
-      nowMs,
+      nowMs: clock(),
+      clock,
       ttlMs: ROLE_TRANSITION_LOCK_TTL_MS,
     });
     if (!sessionLock.acquired) {
@@ -271,6 +273,7 @@ const processPassengerRoleClaimJobs = async ({
   buildClaims,
   limit = 50,
   nowMs = Date.now(),
+  clock = Date.now,
 } = {}) => {
   const snapshot = await db.ref(ROLE_TRANSITION_CLAIM_ROOT)
     .orderByChild('createdAtMs')
@@ -281,7 +284,7 @@ const processPassengerRoleClaimJobs = async ({
   for (const authUid of entries) {
     try {
       results.push(await reconcilePassengerRoleClaimJob({
-        db, auth, authUid, buildClaims, nowMs,
+        db, auth, authUid, buildClaims, nowMs, clock,
       }));
     } catch (error) {
       results.push({ status: 'retry', completed: false, errorCode: error?.code || 'CLAIM_RETRY' });

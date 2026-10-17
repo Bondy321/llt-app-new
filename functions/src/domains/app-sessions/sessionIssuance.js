@@ -29,6 +29,14 @@ const {
 const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
 const APP_SESSION_ISSUANCE_LOCK_TTL_MS = 3 * 60 * 1000;
 
+/** @param {{ clock: () => number, expiresAtMs: number }} options */
+const assertFreshIssuanceDispatch = ({ clock, expiresAtMs }) => {
+  if (clock() < expiresAtMs) return;
+  const error = /** @type {Error & { code?: string }} */ (new Error('App session issuance lease expired before dispatch'));
+  error.code = 'SESSION_IN_PROGRESS';
+  throw error;
+};
+
 /** @type {(...args: any[]) => any} */
 const buildVerifiedLoginGrantUpdates = ({
   authUid,
@@ -87,7 +95,7 @@ const issuePassengerAppSession = async ({
 }) => {
   const ownsAppSessionLock = !existingAppSessionLock;
   const lock = existingAppSessionLock || await acquireAppSessionLock({
-    db, authUid, operation: 'issue', nowMs, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
+    db, authUid, operation: 'issue', nowMs: clock(), clock, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
   });
   if (!lock.acquired) {
     const error = /** @type {Error & { code?: string }} */ (
@@ -141,6 +149,7 @@ const issuePassengerAppSession = async ({
       targetPrincipalType: 'passenger',
     }), {
       [`users/${authUid}/principalType`]: 'passenger',
+      [`users/${authUid}/appSessionId`]: session.sessionId,
       [`app_sessions/${authUid}`]: session,
       [`tours/${tourId}/participants/${authUid}`]: participant,
       [`app_session_events/${eventId}`]: buildSafeAppSessionEvent({
@@ -151,6 +160,12 @@ const issuePassengerAppSession = async ({
         nowMs,
       }),
     });
+    for (const [path, value] of Object.entries(grantUpdates || {})) {
+      updates[path] = { ...value, sessionId: session.sessionId };
+    }
+    if (notificationDeviceSnapshot.exists()) {
+      updates[`notification_devices/${authUid}/authoritySessionId`] = session.sessionId;
+    }
     await cleanupReplacedSession({ db, existingSession, nowMs });
     const commitNowMs = clock();
     if (!(await renewAppSessionLock({
@@ -169,6 +184,17 @@ const issuePassengerAppSession = async ({
     }
     await ensureNoActiveAccountDeletion({ db, authUid });
     if (_bookingRef) await ensureNoActivePassengerAccountDeletion({ db, bookingRef: _bookingRef });
+    const finalCommitNowMs = clock();
+    if (!(await renewAppSessionLock({ db, authUid, owner: lock.owner, nowMs: finalCommitNowMs,
+      ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS }))) {
+      const error = /** @type {Error & { code?: string }} */ (new Error('App session issuance lease changed'));
+      error.code = 'SESSION_IN_PROGRESS';
+      throw error;
+    }
+    updates[`app_session_locks/${authUid}`] = { ...lock.lock, owner: lock.owner,
+      operation: 'issue', expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS,
+      sessionId: session.sessionId, sessionRevision: session.sessionRevision };
+    assertFreshIssuanceDispatch({ clock, expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS });
     await db.ref().update(updates);
     committed = true;
     return session;
@@ -199,7 +225,7 @@ const issueDriverAppSession = async ({
   clock = Date.now,
 }) => {
   const lock = await acquireAppSessionLock({
-    db, authUid, operation: 'issue', nowMs, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
+    db, authUid, operation: 'issue', nowMs: clock(), clock, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
   });
   if (!lock.acquired) {
     const error = /** @type {Error & { code?: string }} */ (
@@ -233,6 +259,7 @@ const issueDriverAppSession = async ({
       authUid,
       targetPrincipalType: 'driver',
     }), profileUpdates, {
+      [`users/${authUid}/appSessionId`]: session.sessionId,
       [`app_sessions/${authUid}`]: session,
       [`app_session_events/${eventId}`]: buildSafeAppSessionEvent({
         session,
@@ -242,6 +269,9 @@ const issueDriverAppSession = async ({
         nowMs,
       }),
     });
+    if (notificationDeviceSnapshot.exists()) {
+      updates[`notification_devices/${authUid}/authoritySessionId`] = session.sessionId;
+    }
     await cleanupReplacedSession({ db, existingSession, nowMs });
     const commitNowMs = clock();
     if (!(await renewAppSessionLock({
@@ -252,6 +282,17 @@ const issueDriverAppSession = async ({
       throw error;
     }
     await ensureNoActiveAccountDeletion({ db, authUid });
+    const finalCommitNowMs = clock();
+    if (!(await renewAppSessionLock({ db, authUid, owner: lock.owner, nowMs: finalCommitNowMs,
+      ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS }))) {
+      const error = /** @type {Error & { code?: string }} */ (new Error('App session issuance lease changed'));
+      error.code = 'SESSION_IN_PROGRESS';
+      throw error;
+    }
+    updates[`app_session_locks/${authUid}`] = { ...lock.lock, owner: lock.owner,
+      operation: 'issue', expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS,
+      sessionId: session.sessionId, sessionRevision: session.sessionRevision };
+    assertFreshIssuanceDispatch({ clock, expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS });
     await db.ref().update(updates);
     committed = true;
     return session;
@@ -267,6 +308,7 @@ const issueDriverAppSession = async ({
 
 
 module.exports = {
+  APP_SESSION_ISSUANCE_LOCK_TTL_MS,
   buildSafeAppSessionEvent,
   buildVerifiedLoginGrantUpdates,
   issueDriverAppSession,
