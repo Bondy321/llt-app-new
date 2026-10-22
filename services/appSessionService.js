@@ -138,10 +138,15 @@ const createAppSessionService = ({
   const endRequestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
     ? Math.min(requestTimeoutMs, 60_000) : 15_000;
 
-  const persistSession = async (session) => {
+  const persistSession = async (session, { isCurrent = () => true } = {}) => {
     const valid = validateAppSession(session, { nowMs: now() });
     if (!valid) throw new Error('The server returned an invalid or expired app session.');
-    await mutateStorage(() => storage.setItem(APP_SESSION_KEY, JSON.stringify(valid)));
+    const committed = await mutateStorage(async () => {
+      if (!isCurrent()) return false;
+      await storage.setItem(APP_SESSION_KEY, JSON.stringify(valid));
+      return true;
+    });
+    if (!committed) return false;
     return valid;
   };
 
@@ -196,7 +201,9 @@ const createAppSessionService = ({
     if (!parsed && raw) await storage.removeItem(PENDING_SESSION_END_KEY);
     return parsed;
   });
-  const clearPendingEnd = () => mutateStorage(() => storage.removeItem(PENDING_SESSION_END_KEY));
+  const clearPendingEnd = ({ isCurrent = () => true } = {}) => mutateStorage(() => (
+    isCurrent() ? storage.removeItem(PENDING_SESSION_END_KEY) : false
+  ));
 
   const requestEnd = async (pending) => {
     const validPending = validatePendingSessionEnd(pending);
@@ -300,11 +307,11 @@ const createAppSessionService = ({
       if (expiryTimer !== null) cancelTimer(expiryTimer);
       expiryTimer = null;
     };
-    const revoke = (reason) => {
+    const revoke = (reason, session = acceptedSession) => {
       if (!active || notified) return;
       notified = true;
       clearExpiryTimer();
-      onRevoked?.({ reason });
+      onRevoked?.({ reason, session });
     };
     const checkExpiry = () => {
       clearExpiryTimer();
@@ -324,7 +331,7 @@ const createAppSessionService = ({
       const transition = classifySessionTransition(acceptedSession, remote, { allowDriverAssignment: Boolean(onSession) });
       if (transition === 'invalid') { revoke('SESSION_CHANGED'); return; }
       if (transition === 'stale') return;
-      if (remote.expiresAtMs <= now()) { revoke('SESSION_EXPIRED'); return; }
+      if (remote.expiresAtMs <= now()) { revoke('SESSION_EXPIRED', remote); return; }
       if (transition === 'duplicate') {
         // A previous projection load may have failed while offline. Replaying
         // this same authority can repair its seed, without lowering revision.

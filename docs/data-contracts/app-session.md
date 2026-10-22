@@ -271,3 +271,57 @@ session listeners behind startup Retry until that cleanup and restoration succee
 `tests/driverSessionReconciliation.test.js` exercises the real listener, application runner and
 mounted logout lifecycle with external adapters, including event/HTTP ordering, removal, stale
 results, installation/identity replacement, expiry, restore and guarded persistence.
+
+### Fresh login and subscription ownership
+
+Driver activation first installs the verified `driverId` in the local identity
+projection, with tour scope withheld. The login attempt captures the installation,
+previous authority and operation generation before its first asynchronous phase;
+a superseded preparation cannot activate. Login storage commits are guarded inside
+the serialized adapter as well as at the application continuation boundary.
+
+An unchanged initial own-session event defers assignment projection while that
+same login is preparing or saving its seed. The listener remains active: higher
+revisions are accepted and reconciled immediately, and remote deletion,
+replacement and current accepted expiry can still retire the captured session.
+Subsequent login phases require the captured session, principal, installation and
+revision to remain current. A save callback captured with a null session must
+supply explicit verified authority; it cannot fall through to an unguarded driver
+seed write. Once a login's tour is exposed, its booking ID is the verified driver
+ID and its persisted tour/booking seed has already committed.
+
+A higher assignment can finish while login awaits onboarding, identity work or a
+cache write. The old login must not restore its original projection or route.
+Its still-owned onboarding decision is applied to the accepted session without
+rewriting the old booking/tour seed. Assignment reconciliation preserves an active
+notification-onboarding route through an explicit pending intent cleared by the
+real completion runner. Completion while login diagnostics or route storage is
+pending cannot reopen onboarding; a pending assignment seed does not leave login
+permanently in its preparing phase. A login cache write already in progress is included
+in the bounded retirement drain before its old-tour cache is purged; logout also
+awaits that captured login task. This drain does not claim to serialize every
+storage writer: an already-issued independent navigation batch can still recreate
+booking/tour seed keys after cleanup while the app-session key remains absent.
+That incomplete local-data-removal case remains a separate tracked follow-up.
+
+The mounted logout subscription owns a separate generation from operational
+retirement. Failed assignment retirement followed by duplicate-event repair does
+not invalidate revocation callbacks for the still-current subscription. Callbacks
+also check the latest session identity, installation, lifecycle state and disabled
+state, including the render-to-passive-cleanup interval. A genuine current-session
+null, expiry or replacement invokes the real captured local-cleanup path; stale
+subscriptions cannot clear successor authority.
+Expiry events include their triggering authority. An obsolete lower deadline
+cannot revoke an HTTP-renewed same-session authority before React runs passive
+subscription cleanup, whereas a newly observed expired higher revision remains
+actionable. The synchronous logout-status ref is updated with every displayed
+status transition, preserving the active fence during React batching and allowing
+a verified new login after the previous logout completes.
+
+The additional mounted cases in `tests/driverSessionMountedLifecycle.test.js`
+exercise fresh null booking/tour state, initial duplicates, intervening revisions,
+first assignment, notification onboarding, pre-activation supersession, logout,
+remote revocation and expiry, duplicate repair and renewed timers. They use the
+production login runner, session service, reconciliation, guarded save and local
+cleanup implementations with controlled external adapters, and assert both React
+scope/route and persistent session/projection removal.

@@ -39,6 +39,7 @@ const RETENTION_ENGINE_SOURCE_PATHS = Object.freeze([
   'state.js',
   '../notifications/notificationAdminFunctions.js',
   '../notifications/notificationLegacyFence.js',
+  '../notifications/notificationMarketingAudience.js',
   '../notifications/notificationReceipts.js',
   '../notifications/notificationRetentionIntegration.js',
   '../../infrastructure/database/existingRecordTransaction.js',

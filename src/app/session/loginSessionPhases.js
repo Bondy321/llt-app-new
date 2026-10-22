@@ -1,3 +1,5 @@
+import { prepareDriverLoginProjection } from './driverLoginOwnership';
+
 const asRecord = (value) => value || {};
 
 export const prepareLoginContext = async (deps, reference, tourDetails, identityData, userType, options) => {
@@ -71,6 +73,7 @@ export const activateVerifiedSession = async (deps, context) => {
   } = deps;
   const { identity, loginOptions, targetScreen, tour, userType } = context;
   const verifiedAppSession = loginOptions.appSession || await appSessionService.readSession();
+  if (!context.isActivationCurrent()) return false;
   const expectedPrincipalId = userType === 'driver'
     ? `driver:${identity.id}`
     : identity.stablePassengerId;
@@ -85,9 +88,12 @@ export const activateVerifiedSession = async (deps, context) => {
     throw sessionError;
   }
 
-  await appSessionService.persistSession(verifiedAppSession);
-  await appSessionService.clearPendingEnd();
+  if (await appSessionService.persistSession(verifiedAppSession, { isCurrent: context.isActivationCurrent }) === false
+    || !context.isActivationCurrent()) return false;
+  await appSessionService.clearPendingEnd({ isCurrent: context.isActivationCurrent });
+  if (!context.isActivationCurrent()) return false;
   sessionGenerationRef.current += 1;
+  if (userType === 'driver') prepareDriverLoginProjection(deps, context, verifiedAppSession);
   setAppSession(verifiedAppSession);
   setLogoutStatus({ state: 'idle', error: null, diagnostic: null });
   if (!loginOptions.alreadyHydrated) {

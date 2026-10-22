@@ -62,6 +62,7 @@ const {
   releaseNotificationDeviceLock,
 } = loadLegacyLibrary('appSessionCleanup');
 const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
+const { isValidAppSessionId } = loadLegacyLibrary('appSession');
 const { cleanupExpiredOperationsTerminalWarnings } = loadLegacyLibrary('operationsTerminalWarnings');
 
 const REQUEST_LOCK_TTL_MS = 180 * 1000;
@@ -183,6 +184,8 @@ const buildInitialAccountDeletionJob = ({ deletionId, privateScope, nowMs }) => 
 
 // eslint-disable-next-line complexity -- reservation deliberately keeps the lock/commit failure paths together
 const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = Date.now() }) => {
+  const expectedSessionId = input?.expectedSessionId;
+  if (!isValidAppSessionId(expectedSessionId)) return { status: 400, reason: 'INVALID_INPUT' };
   const owner = randomUUID();
   let reservationLock = null;
   let sessionLock = null;
@@ -198,6 +201,9 @@ const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = 
     }
     sessionLock = await acquireAppSessionLock({
       db, authUid, operation: 'revoke', owner, nowMs, ttlMs: REQUEST_LOCK_TTL_MS,
+      // Admission may advance only the captured session, never its successor.
+      // An acquired mismatched lock still requires the scope check below.
+      expectedSessionId,
     });
     if (!sessionLock.acquired) {
       return {
@@ -231,7 +237,7 @@ const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = 
     }
 
     const scope = await deriveTrustedAccountDeletionScope({
-      db, authUid, expectedSessionId: input.expectedSessionId, nowMs,
+      db, authUid, expectedSessionId, nowMs,
     });
     if (!scope.valid) {
       return {

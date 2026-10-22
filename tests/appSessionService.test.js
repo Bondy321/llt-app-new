@@ -318,7 +318,7 @@ test('remote session subscription reports deletion or replacement immediately', 
     onRevoked: (event) => revoked.push(event),
   });
   listener({ val: () => null });
-  assert.deepEqual(revoked, [{ reason: 'SESSION_ENDED' }]);
+  assert.deepEqual(revoked, [{ reason: 'SESSION_ENDED', session: SESSION }]);
   unsubscribe();
   assert.equal(detached, true);
 });
@@ -353,7 +353,7 @@ test('session expiry closes an offline open session without waiting for a remote
   assert.equal(timer.delay, 18_000);
   harness.setNow(20_000);
   timer.callback();
-  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED' }]);
+  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED', session: SESSION }]);
   harness.remote(null);
   harness.foreground();
   assert.equal(harness.revoked.length, 1);
@@ -365,7 +365,7 @@ test('foreground immediately checks an expired session after suspended timers', 
   const harness = expiryHarness();
   harness.setNow(21_000);
   harness.foreground();
-  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED' }]);
+  assert.deepEqual(harness.revoked, [{ reason: 'SESSION_EXPIRED', session: SESSION }]);
   assert.equal(harness.timers.size, 0);
   harness.unsubscribe();
   assert.equal(harness.foregroundRemoved(), true);

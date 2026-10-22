@@ -122,6 +122,18 @@ const createUpdatePlan = ({
       unknownPaths,
     };
   }
+  // A merge cannot prove that coupled backend authority/rules are deployed.
+  // Explicit dispatch remains available after the recorded dependency order.
+  if (classified.some(({ fileName }) => fileName.startsWith('functions/')
+    || ['database.rules.json', 'storage_rules.json', 'firebase.json'].includes(fileName))) {
+    return {
+      shouldPublish: false,
+      reason: 'backend-change-manual-required',
+      bundleChanged: true,
+      nativeChanged: false,
+      unknownPaths: [],
+    };
+  }
   return {
     shouldPublish: true,
     reason: 'mobile-bundle-change',

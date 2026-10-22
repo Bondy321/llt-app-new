@@ -297,6 +297,12 @@ test('new notification delivery roots are server-owned and unreadable to ordinar
   }
 
   await assertFails(dbFor(PASSENGER_UID).ref(`notification_devices/${PASSENGER_UID}`).set(notificationDevice()));
+  for (const caller of [PASSENGER_UID, ADMIN_UID]) {
+    await assertFails(dbFor(caller).ref(`notification_devices/${PASSENGER_UID}/authoritySessionId`)
+      .set(`sess_v1_${'f'.repeat(32)}`));
+    await assertFails(dbFor(caller).ref(`notification_devices/${PASSENGER_UID}`)
+      .update({ authoritySessionId: null }));
+  }
   await assertFails(dbFor(PASSENGER_UID).ref(`notification_consents/${PASSENGER_UID}`).set({ forged: true }));
 });
 

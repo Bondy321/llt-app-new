@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import appSessionService from '../../../services/appSessionService';
 import logger from '../../../services/loggerService';
-import { sameSessionIdentity } from '../../../services/appSessionTransition';
+import { classifySessionTransition, sameSessionIdentity } from '../../../services/appSessionTransition';
 
 export default function useLogoutLifecycle({
   appSession,
@@ -12,13 +12,16 @@ export default function useLogoutLifecycle({
   isConnected,
   logoutContextRef,
   logoutStatus,
+  logoutStatusRef,
   purgeLocalSession,
-  sessionGenerationRef,
   setCurrentScreen,
   setLogoutStatus,
   userUid,
 }) {
   const appSessionListenerRef = useRef(null);
+  // Subscription ownership is independent of tour-work retirement. A duplicate
+  // projection repair can retire operational work without replacing authority.
+  const subscriptionGenerationRef = useRef(0);
   const retryAttemptRef = useRef(0);
   const retryInFlightRef = useRef(false);
   const latestRef = useRef(null);
@@ -83,7 +86,7 @@ export default function useLogoutLifecycle({
     if (typeof appSessionListenerRef.current === 'function') appSessionListenerRef.current();
     appSessionListenerRef.current = null;
     if (disabled || !appSession || !userUid || logoutStatus.state !== 'idle') return undefined;
-    const generation = ++sessionGenerationRef.current;
+    const generation = ++subscriptionGenerationRef.current;
     const unsubscribe = appSessionService.subscribe({
       authUid: userUid,
       expectedSession: appSession,
@@ -94,12 +97,18 @@ export default function useLogoutLifecycle({
         });
         return () => subscription.remove();
       },
-      onRevoked: async ({ reason }) => {
-        if (generation !== sessionGenerationRef.current) return;
+      onRevoked: async ({ reason, session: revokedSession = appSession }) => {
+        if (generation !== subscriptionGenerationRef.current) return;
         const latest = latestRef.current;
         const capturedSession = appSessionRef ? appSessionRef.current : latest.appSession;
-        if (latest.disabled || latest.logoutState !== 'idle' || latest.userUid !== userUid
+        if (latest.disabled || (logoutStatusRef?.current?.state || latest.logoutState) !== 'idle' || latest.userUid !== userUid
           || !sameSessionIdentity(capturedSession, appSession)) return;
+        // HTTP reconciliation can renew the ref before React replaces this
+        // subscription. Only its old expiry is obsolete; null/replacement
+        // events still revoke the current identity. The next effect owns the
+        // renewed deadline, including immediate expiry if it has also elapsed.
+        if (reason === 'SESSION_EXPIRED' && capturedSession.expiresAtMs > revokedSession.expiresAtMs
+          && classifySessionTransition(revokedSession, capturedSession, { allowDriverAssignment: true }) === 'advance') return;
         logoutContextRef.current = { authUid: userUid, appSession: capturedSession };
         setLogoutStatus({ state: 'requesting', error: null, diagnostic: capturedSession.sessionId.slice(-6) });
         const cleanup = await latestRef.current.purgeLocalSession({ capturedSession });
@@ -122,11 +131,11 @@ export default function useLogoutLifecycle({
     });
     appSessionListenerRef.current = unsubscribe;
     return () => {
-      sessionGenerationRef.current += 1;
+      subscriptionGenerationRef.current += 1;
       unsubscribe();
       if (appSessionListenerRef.current === unsubscribe) appSessionListenerRef.current = null;
     };
-  }, [appSession, appSessionRef, disabled, logoutContextRef, logoutStatus.state, sessionGenerationRef, setLogoutStatus, userUid]);
+  }, [appSession, appSessionRef, disabled, logoutContextRef, logoutStatus.state, logoutStatusRef, setLogoutStatus, userUid]);
 
   return retryPendingLogout;
 }

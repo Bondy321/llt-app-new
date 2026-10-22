@@ -74,10 +74,12 @@ const cleanupOwnedSessionRecords = async ({ db, session, userProfile, notificati
     }
   }
   if (notificationDevice) {
+    // Legacy operational bindings prove exact session ownership. An untagged
+    // marketing-only snapshot can have been created after takeover; equality
+    // with that snapshot provides no ownership evidence and must preserve it.
     await mutateOwnedRecord(db.ref(`notification_devices/${authUid}`), (current) => (
       current.authoritySessionId ? current.authoritySessionId === sessionId
-        : (current.operationalSessionId === sessionId || (!current.operationalSessionId
-          && JSON.stringify(current) === JSON.stringify(notificationDevice)))
+        : current.operationalSessionId === sessionId
     ), (current) => {
       const updates = buildNotificationDeviceCleanupUpdates({ session, notificationDevice: current,
         disableAllNotificationDelivery, nowMs });
