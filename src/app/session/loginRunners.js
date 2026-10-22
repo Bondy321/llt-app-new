@@ -6,6 +6,7 @@ import {
   resolvePostLoginDestination,
 } from './loginSessionPhases';
 import defaultAccountDeletionService from '../../../services/accountDeletionService';
+import { beginDriverLoginAttempt, finishDriverLoginProjection } from './driverLoginOwnership';
 
 export const runResolveOfflineLogin = async (deps, reference, normalizedEmail) => {
   const {
@@ -60,6 +61,7 @@ export const runHandleLoginSuccess = async (
   userType = 'passenger',
   options = {},
 ) => {
+  const isActivationCurrent = userType === 'driver' ? beginDriverLoginAttempt(deps) : () => true;
   const accountDeletionService = deps.accountDeletionService || defaultAccountDeletionService;
   if (await accountDeletionService.readPending()) {
     const error = new Error('Account deletion must finish before another tour can be opened.');
@@ -74,10 +76,16 @@ export const runHandleLoginSuccess = async (
     userType,
     options,
   );
-  await activateVerifiedSession(deps, context);
+  context.isActivationCurrent = isActivationCurrent;
+  if (!isActivationCurrent() || await activateVerifiedSession(deps, context) === false) return;
   const destination = await resolvePostLoginDestination(deps, context);
   if (userType === 'driver') {
-    await runDriverLogin(deps, context, destination);
+    context.destination = destination;
+    context.onboardingPending = destination.shouldOnboardNotifications;
+    context.projectionTask = runDriverLogin(deps, context, destination);
+    try { await context.projectionTask; }
+    catch (error) { context.phase = 'failed'; throw error; }
+    await finishDriverLoginProjection(deps, context, destination);
     return;
   }
   await runPassengerLogin(deps, context, destination);

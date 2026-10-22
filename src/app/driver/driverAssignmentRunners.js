@@ -1,4 +1,5 @@
 import { classifySessionTransition, sameSessionIdentity } from '../../../services/appSessionTransition';
+import { driverAssignmentDestination } from '../session/driverLoginOwnership';
 
 const assertRetired = (results = []) => {
   if (results.some(result => result.status === 'rejected' || result.value?.success === false)) {
@@ -22,7 +23,10 @@ const retryFailedRetirement = async (ref, coordinator, assertActive) => {
   }
 };
 
-const drainDriverAssignmentRetirement = async (ref, assertActive) => {
+const drainDriverAssignmentRetirement = async (ref, assertActive, pendingLoginWork) => {
+  const loginWork = pendingLoginWork?.();
+  await Promise.resolve(loginWork).catch(() => {});
+  assertActive();
   const coordinator = ref.current;
   if (!coordinator) return;
   // Retirement can finish before an accepted projection batch. Drain that batch
@@ -47,7 +51,7 @@ const drainDriverAssignmentRetirement = async (ref, assertActive) => {
 };
 
 export const settleDriverAssignmentRetirement = async (ref, {
-  timeoutMs = 15_000, scheduleTimer = setTimeout, cancelTimer = clearTimeout,
+  timeoutMs = 15_000, scheduleTimer = setTimeout, cancelTimer = clearTimeout, pendingLoginWork,
 } = {}) => {
   let timer;
   let active = true;
@@ -57,7 +61,7 @@ export const settleDriverAssignmentRetirement = async (ref, {
   const deadline = new Promise((_resolve, reject) => {
     timer = scheduleTimer(() => { active = false; reject(pending()); }, limitMs);
   });
-  try { await Promise.race([drainDriverAssignmentRetirement(ref, assertActive), deadline]); }
+  try { await Promise.race([drainDriverAssignmentRetirement(ref, assertActive, pendingLoginWork), deadline]); }
   finally { active = false; cancelTimer(timer); }
 };
 
@@ -97,8 +101,17 @@ const resolveCandidate = (deps, event) => {
     .then(current => current.valid ? complete(current.session) : null);
 };
 
-const projectionMatches = (context, session) => context.bookingData?.assignedTourId === session.tourId
+const projectionMatches = (context, session) => context.bookingData?.id === session.driverId
+  && context.bookingData?.assignedTourId === session.tourId
   && (session.tourId === null || context.currentDriverLifecycleScope?.tourId === session.tourId);
+
+const pendingLoginScope = (login, session) => (
+  login?.phase === 'projecting' && login.projectionTask && login.tour?.id
+    && sameSessionIdentity(login.verifiedAppSession, session)
+    ? { authUid: login.authUid, driverId: session.driverId, tourId: login.tour.id,
+      startDate: login.tour.startDate, departureKey: null }
+    : null
+);
 
 const enqueueReconciliation = (coordinator, token, operation) => {
   const task = coordinator.tail.catch(() => {}).then(async () => {
@@ -126,12 +139,13 @@ const reconcileAcceptedAssignment = async (deps, transition) => {
   const { departure, tour } = await loadAssignedTour(deps, session.tourId);
   if (!isCurrent()) return { ignored: true };
   const updatedBooking = projectDriverAssignment(booking, session.tourId, tour, departure);
+  const destination = driverAssignmentDestination(deps, session);
   const committed = await deps.appSessionService.persistSessionTransition({
     expectedSession: previousSession, session, isCurrent,
     projectionEntries: [
       [deps.SESSION_KEYS.BOOKING_DATA, JSON.stringify(updatedBooking)],
       [deps.SESSION_KEYS.TOUR_DATA, JSON.stringify(tour)],
-      [deps.SESSION_KEYS.LAST_SCREEN, 'DriverHome'],
+      [deps.SESSION_KEYS.LAST_SCREEN, destination.screen],
     ],
   });
   if (!committed || !isCurrent()) return { ignored: true };
@@ -141,9 +155,10 @@ const reconcileAcceptedAssignment = async (deps, transition) => {
   deps.setBookingData(updatedBooking);
   deps.setTourData(tour);
   deps.setTourCode(tour?.tourCode || '');
-  deps.setScreenParams({});
+  const latestDestination = driverAssignmentDestination(deps, session);
+  deps.setScreenParams(latestDestination.params);
   deps.routeHistoryRef.current.reset();
-  deps.setCurrentScreen('DriverHome');
+  deps.setCurrentScreen(latestDestination.screen);
   coordinator.completed = session;
   coordinator.previousScope = null;
   return { tour, departureKey: departure?.departureKey || null, session };
@@ -157,9 +172,10 @@ const retirePreviousAssignment = (deps, coordinator, previousScope, transition) 
   deps.setBookingData(projectDriverAssignment(booking, null));
   deps.setTourData(null);
   deps.setTourCode('');
-  deps.setScreenParams({});
+  const destination = driverAssignmentDestination(deps, session);
+  deps.setScreenParams(destination.params);
   deps.routeHistoryRef.current.reset();
-  deps.setCurrentScreen('DriverHome');
+  deps.setCurrentScreen(destination.screen);
   deps.setDriverSessionGeneration(value => value + 1);
   coordinator.previousScope = previousScope;
   const token = coordinator.token;
@@ -169,9 +185,15 @@ const retirePreviousAssignment = (deps, coordinator, previousScope, transition) 
       || !sameSessionIdentity(session, deps.appSessionRef.current)
       || deps.appSessionRef.current.tourId !== session.tourId) throw new Error('Assignment cleanup authority changed');
   };
+  const loginWork = deps.loginProjectionRef?.current?.projectionTask;
   const operations = [() => deps.offlineSyncService.setActiveSessionScope(null),
     () => deps.stopDriverTracking({ reason: 'assignment_changed' }),
-    ...(previousScope ? [() => deps.driverOperationalLifecycleService.purge(previousScope)] : [])];
+    ...(previousScope ? [async () => {
+      // A login's already-issued cache write must settle before retiring it.
+      await loginWork?.catch(() => {});
+      assertOwner();
+      return deps.driverOperationalLifecycleService.purge(previousScope);
+    }] : [])];
   coordinator.retryRetirement = () => Promise.allSettled(operations.map(operation => {
     try { assertOwner(); return operation(); } catch (error) { return Promise.reject(error); }
   }));
@@ -190,6 +212,11 @@ export const runHandleDriverAssignmentChange = async (deps, event = {}) => {
   const { context, latest, session, authUid } = candidate;
   const change = classifySessionTransition(latest, session, { allowDriverAssignment: true });
   if (change === 'invalid' || change === 'stale') return { ignored: true };
+  const login = deps.loginProjectionRef?.current;
+  if (change === 'duplicate' && ['preparing', 'projecting'].includes(login?.phase)
+    && classifySessionTransition(login.verifiedAppSession, session) === 'duplicate') {
+    return { session: latest, pendingLoginProjection: true };
+  }
   const coordinator = deps.assignmentReconciliationRef.current || { token: 0, tail: Promise.resolve(), completed: null };
   deps.assignmentReconciliationRef.current = coordinator;
   if (change === 'duplicate' && coordinator.pendingRevision === session.sessionRevision) return coordinator.tail;
@@ -199,9 +226,9 @@ export const runHandleDriverAssignmentChange = async (deps, event = {}) => {
   }
   const token = ++coordinator.token;
   coordinator.pendingRevision = session.sessionRevision;
-  const previousScope = context.currentDriverLifecycleScope || coordinator.previousScope;
+  const previousScope = context.currentDriverLifecycleScope || coordinator.previousScope || pendingLoginScope(login, session);
   const transition = { authUid, session, previousSession: latest, context, coordinator,
-    booking: context.bookingData || {},
+    booking: { ...(context.bookingData?.id === session.driverId ? context.bookingData : {}), id: session.driverId },
     isCurrent: () => coordinator.token === token && deps.getCurrentContext().active
       && deps.getCurrentContext().userUid === authUid
       && classifySessionTransition(session, deps.appSessionRef.current) === 'duplicate' };

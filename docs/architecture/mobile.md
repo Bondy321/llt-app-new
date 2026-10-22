@@ -14,6 +14,27 @@ monotonic identity validation, expiry and serialized guarded storage. Actual tou
 retire tracking/replay and old scoped work before exposing the new tour. Revision-only changes
 preserve the active operational scope. See `docs/data-contracts/app-session.md`.
 
+Fresh driver login has explicit attempt and projection ownership in
+`driverLoginOwnership`. It exposes the verified driver identity with no operational
+tour before starting the own-session listener, and commits the validated display
+seed before making the login's tour usable. Initial duplicate events defer to that
+pending login; higher revisions, replacement and expiry remain observable. Every
+awaited login continuation and save carries its captured session authority. A
+newer assignment owns the projection while login may finish only its still-owned
+notification-onboarding decision. Logout subscriptions have their own generation;
+operational retirement must never invalidate a current revocation subscription.
+`useLogoutStatus` maintains the synchronous lifecycle fence alongside React state,
+so re-login and revocation do not depend on when React flushes a status update.
+Onboarding completion owns an explicit pending intent; assignment/load timing
+cannot make a completed onboarding screen reappear. Expiry callbacks carry the
+authority that expired, allowing HTTP renewal before passive effect cleanup to
+reject an obsolete deadline without suppressing a real later expiry.
+
+`tests/driverSessionMountedLifecycle.test.js` mounts the real React logout hook
+with the real login, session-service, assignment, save and local-cleanup paths.
+External adapters provide synthetic storage, location, transport, clocks and tour
+reads; assertions inspect rendered driver/canonical/offline scope and durable keys.
+
 Account deletion is a separate blocking lifecycle, not an expanded logout. The service generates an
 opaque receipt and captures the validated original Auth UID in a secure schema-v3 local record before
 requesting deletion. It sends only the receipt and exact app-session ID, never the local cleanup UID,

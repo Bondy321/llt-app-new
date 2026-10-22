@@ -97,13 +97,13 @@ test('accepted expiry supersedes the previous timer; replacement session, princi
     assert.deepEqual(h.revoked, []);
     assert.equal([...h.timers.values()][0].delay, 39999);
     h.setNow(60000); [...h.timers.values()][0].callback();
-    assert.deepEqual(h.revoked, [{ reason: 'SESSION_EXPIRED' }]);
+    assert.deepEqual(h.revoked, [{ reason: 'SESSION_EXPIRED', session: next }]);
   } finally { h.unsubscribe(); }
   for (const patch of [{ sessionId: `sess_v1_${'b'.repeat(32)}` },
     { driverId: 'D-OTHER', principalId: 'driver:D-OTHER' }, { tourId: 'TOUR_A' }]) {
     const invalid = await harness();
     try { invalid.emit({ ...INITIAL, ...patch }); await invalid.settle();
-      assert.deepEqual(invalid.revoked, [{ reason: 'SESSION_CHANGED' }]);
+      assert.deepEqual(invalid.revoked, [{ reason: 'SESSION_CHANGED', session: INITIAL }]);
     } finally { invalid.unsubscribe(); }
   }
 });

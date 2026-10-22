@@ -48,6 +48,19 @@ test('declared rules digest matches the deployable rules artifact', () => {
   );
 });
 
+test('marketing audience cleanup changes invalidate retention source attestation', () => {
+  const artifact = '../notifications/notificationMarketingAudience.js';
+  assert.ok(RETENTION_ENGINE_SOURCE_PATHS.includes(artifact));
+  const changedPath = path.resolve(ENGINE_ROOT, artifact);
+  const changed = hashRetentionEngineSources({
+    readFile: (filePath) => {
+      const value = fs.readFileSync(filePath);
+      return path.resolve(filePath) === changedPath ? Buffer.concat([value, Buffer.from('\nchanged')]) : value;
+    },
+  });
+  assert.notEqual(changed, PROTOCOL.engineSourceDigest);
+});
+
 const shadowEvidence = () => {
   const value = {
     schemaVersion: 1,

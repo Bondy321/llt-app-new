@@ -32,9 +32,16 @@ const buildMarketingAudienceUpdates = ({ authUid, device }) => {
   ]));
 };
 
-/** @param {{ db: any, authUid: string, device: any }} input */
-const persistMarketingAudienceForDevice = async ({ db, authUid, device }) => {
-  await db.ref().update(buildMarketingAudienceUpdates({ authUid, device }));
+/** @param {{ db: any, authUid: string, device: any, canMutate?: () => boolean }} input */
+const persistMarketingAudienceForDevice = async ({ db, authUid, device, canMutate }) => {
+  const updates = buildMarketingAudienceUpdates({ authUid, device });
+  if (!canMutate) { await db.ref().update(updates); return; }
+  for (const [path, value] of Object.entries(updates)) {
+    await db.ref(path).transaction(current => {
+      if (!canMutate() || Number(current?.registrationRevision || 0) > Number(device.registrationRevision)) return undefined;
+      return value;
+    }, undefined, false);
+  }
 };
 
 /** @param {{ db: any, authUid: string, registrationRevision: number }} input */

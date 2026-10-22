@@ -4,7 +4,7 @@ Welcome, Agent. This file is the operational source of truth for contributors wo
 
 For the current launch work, the user authorizes committing and pushing completed fixes directly to `main`. Keep the implementation and required verification standards; use a short implement, verify, push loop without adding staged rollout or PR approval steps. Record any required service deployment and live checks truthfully; a Git push alone does not make backend changes live.
 
-Last updated: October 17, 2026
+Last updated: October 22, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 Source membership, cancellation and boarding identity are specified in `docs/data-contracts/source-passenger-roster.md`. Missing passenger email is expected roster-only data, not an import error. Preserve private archives, manual additions, generation fences and encoded boarding identity; never infer source membership from pickup/email reports or merge old positional history into a new roster.
@@ -13,6 +13,7 @@ Live location publication uses server-owned per-tour revision/epoch fencing in c
 Explicit native tracking uses authenticated HTTP for current-session reads, intent writes and GPS publication. Its tracking-specific publisher must not depend on the RTDB SDK socket, connection metadata or `onDisconnect`; preserve server authority checks, explicit Stop tombstones, sample freshness and source expiry. The foreground SDK publication service retains its separate disconnect cleanup.
 Notification retention is specified by `docs/data-contracts/notification-delivery.md`, `docs/performance/notification-retention-scale.md`, and `docs/operations/notification-retention.md`.
 Wave 1 reliability contracts and release evidence are in `docs/operations/wave1-reliability-2026-10-17.md`. Authorised driver assignment reconciles the same installation/session/principal monotonically through the session adapter and application runner; retire old-tour replay/listeners/tracking and require a fresh explicit tracking Start. Revision-only lease fences must not restart tour work. Existing-record Admin transactions use `transactExistingRecord` and its `applied` result, not a retained-cache assumption or `committed` alone. Cleanup uses bounded canonical revision/expiry transactions plus exact-session derived ownership; routine notification registration must not advance the canonical revision. Keep login claim admission separate from strict established driver binding.
+Wave 1 sign-off corrections are in `docs/operations/wave1-signoff-corrections-2026-10-22.md`. Fresh-login identity/projection ownership and revocation-subscription ownership are explicit and separate from operational generations. Captured deletion requests supply their expected session before revision-advancing admission. Device cleanup ownership comes from server-verified current session authority independently of operational eligibility; an equal untagged snapshot is not ownership. The source sign-off and deployed/mobile acceptance are separate. Preserve the documented old/new notification-worker overlap release condition and qualified notification-accounting follow-up.
 
 ---
 
@@ -65,11 +66,11 @@ Mobile:
 Web admin:
 
 - React `19.2.8` (lockfile resolution)
-- Vite `7.3.6` (lockfile resolution)
+- Vite `7.3.7` (pinned security patch)
 - Mantine `8.3.18` (lockfile resolution)
 - React Router `7.18.2` (lockfile resolution)
 - Firebase JS SDK `12.17.1` (lockfile resolution)
-- Vitest `4.1.10` (lockfile resolution)
+- Vitest `4.1.12` (pinned security patch)
 
 Functions:
 
@@ -1289,6 +1290,11 @@ All update scripts route through `scripts/release/runEasUpdate.js`, set the exac
 invoking EAS CLI (the workflows pin version 22.6.0 and `eas.json` enforces the same version). CI uses the deterministic path-aware no-op gate
 for a `main` push and retains an explicit manual dispatch. Never call bare
 `eas update` from a release workflow.
+
+Automatic OTA planning requires manual dispatch when a mobile bundle change is
+coupled with Functions, Firebase configuration or rules changes. A merge cannot
+prove that backend dependencies are deployed. Complete the recorded service/rules
+release and acceptance requirements before the authorised manual delivery.
 
 Native-impacting changes are guarded by `npm run release:compatibility:check`.
 The guard fingerprints the production dependency graph, Expo native config and

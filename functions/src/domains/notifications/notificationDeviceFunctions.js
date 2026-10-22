@@ -107,7 +107,7 @@ const resolveOperationalEligibility = async (db, authUid, input, state, existing
     reason: authority.allowed === true ? null : (authority.reason || 'NOT_AUTHORIZED'),
   };
 };
-const buildNotificationDeviceRecord = ({ authUid, input, existing, action, state, token, operational, nowMs, registrationRevision }) => {
+const buildNotificationDeviceRecord = ({ authUid, input, existing, action, state, token, operational, authoritySessionId, nowMs, registrationRevision }) => {
   const marketingEligible = isMarketingDeliveryEligible(action, state, token);
   return {
     schemaVersion: 1,
@@ -122,10 +122,9 @@ const buildNotificationDeviceRecord = ({ authUid, input, existing, action, state
     operationalTourId: operational.operationalEligible ? operational.requestedTourId : null,
     operationalSessionId: operational.operationalEligible ? operational.requestedSessionId : null,
     operationalSessionRevision: operational.operationalEligible ? operational.requestedSessionRevision : null,
-    // Issuance owns this cleanup fence. A preferences/reconcile write must not
-    // erase it when an unassigned driver has no operational tour eligibility.
-    authoritySessionId: optionalString(existing.authoritySessionId, 80)
-      || (operational.operationalEligible ? operational.requestedSessionId : null),
+    // Ownership is current server-verified session authority, independently of
+    // permission, consent, token or operational tour delivery eligibility.
+    authoritySessionId,
     marketingEligible,
     marketingPreferences: state.marketingPreferences,
     marketingConsentVersion: 1,
@@ -194,12 +193,27 @@ const deleteNotificationAccountState = async ({
     await releaseNotificationDeviceLock({ lockRef: lock.lockRef, owner });
   }
 };
-const staleRequestedSession = ({ action, requestedSessionId, session }) => Boolean(
-  ['logout', 'preferences', 'reconcile'].includes(action)
-  && requestedSessionId
-  && session?.sessionId
-  && session.sessionId !== requestedSessionId
+const endedLogoutDeviceOwner = existing => existing.authoritySessionId || existing.operationalSessionId
+  || (existing.lastMutationAction === 'logout' ? existing.lastMutationSessionId : null);
+const isOwnedEndedLogout = ({ action, requestedSessionId, session, existing }) => Boolean(
+  action === 'logout' && requestedSessionId
+  && (!session?.sessionId || session.sessionId === requestedSessionId)
+  && endedLogoutDeviceOwner(existing) === requestedSessionId
 );
+const resolveRegistrationAuthority = ({ authUid, requestedSessionId, session, nowMs, action, existing }) => {
+  const active = isActiveSessionRecord(session, { nowMs }) && session.authUid === authUid;
+  if (requestedSessionId && (!active || session.sessionId !== requestedSessionId)) {
+    // Mobile ends the canonical session before its notification logout. Exact
+    // server-owned device proof still permits that delivery-reducing cleanup;
+    // it cannot authorise registration/preferences or affect a replacement.
+    if (isOwnedEndedLogout({ action, requestedSessionId, session, existing })) {
+      return { rejected: false, sessionId: null, expiresAtMs: null, endedLogout: true };
+    }
+    return { rejected: true, sessionId: null, expiresAtMs: null };
+  }
+  return { rejected: false, sessionId: active ? session.sessionId : null,
+    expiresAtMs: active ? session.expiresAtMs : null };
+};
 const resolveTransactionRejection = ({ current, suppliedRevision, registrationRevision, action, requestedSessionId }) => {
   const currentRevision = Number(current.registrationRevision || 0);
   if (suppliedRevision && registrationRevision < currentRevision) return 'STALE_DEVICE_MUTATION';
@@ -215,8 +229,9 @@ const resolveTransactionRejection = ({ current, suppliedRevision, registrationRe
   }
   return null;
 };
-const persistNotificationConsent = async ({ db, authUid, nextRecord, registrationRevision, nowMs }) => {
+const persistNotificationConsent = async ({ db, authUid, nextRecord, registrationRevision, nowMs, canMutate }) => {
   await db.ref(`notification_consents/${authUid}`).transaction((current) => {
+    if (!canMutate()) return undefined;
     if (Number(current?.registrationRevision || 0) > registrationRevision) return current;
     return {
       schemaVersion: 1,
@@ -231,18 +246,27 @@ const persistNotificationConsent = async ({ db, authUid, nextRecord, registratio
 };
 const applyNotificationDeviceMutation = async ({
   db, ref, authUid, input, action, state, token, operational,
-  suppliedRevision, registrationRevision, requestedSessionId, nowMs,
+  suppliedRevision, registrationRevision, requestedSessionId, nowMs, authority, existing, canMutate,
 }) => {
   let ignoredReason = null;
   let nextRecord = null;
   const result = await ref.transaction((currentValue) => {
+    nextRecord = null;
+    if (!canMutate()) { ignoredReason = 'SESSION_CHANGED'; return undefined; }
+    // A cold null must compare with the server when an existing device was
+    // observed. Only a genuinely absent first registration creates a device.
+    if (currentValue === null && Object.keys(existing).length) return null;
     const current = currentValue || {};
+    if ((current.authoritySessionId || null) !== (existing.authoritySessionId || null)) {
+      ignoredReason = 'STALE_APP_SESSION'; return undefined;
+    }
     ignoredReason = resolveTransactionRejection({
       current, suppliedRevision, registrationRevision, action, requestedSessionId,
     });
     if (ignoredReason) return undefined;
     nextRecord = buildNotificationDeviceRecord({
-      authUid, input, existing: current, action, state, token, operational, nowMs, registrationRevision,
+      authUid, input, existing: current, action, state, token, operational,
+      authoritySessionId: authority.sessionId, nowMs, registrationRevision,
     });
     return nextRecord;
   }, undefined, false);
@@ -253,52 +277,62 @@ const applyNotificationDeviceMutation = async ({
       const canonicalRevision = readPositiveRevision(canonical?.registrationRevision);
       if (canonical && canonicalRevision) {
         await persistNotificationConsent({
-          db, authUid, nextRecord: canonical, registrationRevision: canonicalRevision, nowMs,
+          db, authUid, nextRecord: canonical, registrationRevision: canonicalRevision, nowMs, canMutate,
         });
-        await persistMarketingAudienceForDevice({ db, authUid, device: canonical });
+        await persistMarketingAudienceForDevice({ db, authUid, device: canonical, canMutate });
       }
     }
     return ignoredDeviceMutation(ignoredReason || 'STALE_DEVICE_MUTATION');
   }
-  await persistNotificationConsent({ db, authUid, nextRecord, registrationRevision, nowMs });
-  await persistMarketingAudienceForDevice({ db, authUid, device: nextRecord });
+  await persistNotificationConsent({ db, authUid, nextRecord, registrationRevision, nowMs, canMutate });
+  await persistMarketingAudienceForDevice({ db, authUid, device: nextRecord, canMutate });
   return { status: 200, body: { success: true, device: { permissionState: nextRecord.permissionState, operationalEligible: nextRecord.operationalEligible, marketingEligible: nextRecord.marketingEligible, status: nextRecord.status, tokenHash: nextRecord.tokenHash, registrationRevision, updatedAtMs: nowMs } } };
 };
-const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, action, nowMs }) => {
+const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, action, nowMs, clock, expiresAtMs }) => {
   const existing = (await ref.once('value')).val() || {};
   if (action === 'delete') return removeNotificationDeviceRecords(db, authUid, existing, input, nowMs);
   const tombstone = (await db.ref(`notification_device_tombstones/${authUid}`).once('value')).val();
   if (tombstone?.permanent === true) return ignoredDeviceMutation('DEVICE_DELETED');
   const suppliedRevision = readPositiveRevision(input?.registrationRevision ?? input?.mutationRevision);
   const registrationRevision = suppliedRevision || (readPositiveRevision(existing.registrationRevision) || 0) + 1;
-  const state = resolveDeviceInput(input, existing);
-  if (state.error) return { status: 400, body: { success: false, reason: state.error } };
-  const token = shouldKeepToken(action, state) ? state.token : null;
   const session = (await db.ref(`app_sessions/${authUid}`).once('value')).val();
   const requestedSessionId = optionalString(input?.appSessionId, 80);
-  if (staleRequestedSession({ action, requestedSessionId, session })) return ignoredDeviceMutation('STALE_APP_SESSION');
+  const authority = resolveRegistrationAuthority({ authUid, requestedSessionId, session, nowMs: clock(), action, existing });
+  if (authority.rejected) return ignoredDeviceMutation('STALE_APP_SESSION');
+  // Recovery logout can reduce existing delivery, never install a new token,
+  // permission or consent from an expired request.
+  const effectiveInput = authority.endedLogout ? { action, appSessionId: requestedSessionId } : input;
+  const state = resolveDeviceInput(effectiveInput, existing);
+  if (state.error) return { status: 400, body: { success: false, reason: state.error } };
+  const token = shouldKeepToken(action, state) ? state.token : null;
+  // Every mutation callback checks the captured absolute deadline using a fresh
+  // clock. Once takeover is possible, an old callback cannot commit any device,
+  // consent or audience changes, including work queued behind an adapter await.
+  const canMutate = () => clock() < expiresAtMs
+    && (!authority.expiresAtMs || clock() < authority.expiresAtMs);
   const operational = await resolveOperationalEligibility(
-    db, authUid, { ...input, action }, { ...state, token }, existing, nowMs,
+    db, authUid, { ...effectiveInput, action }, { ...state, token }, existing, clock(),
   );
   return applyNotificationDeviceMutation({
-    db, ref, authUid, input, action, state, token, operational,
-    suppliedRevision, registrationRevision, requestedSessionId, nowMs,
+    db, ref, authUid, input: effectiveInput, action, state, token, operational,
+    suppliedRevision, registrationRevision, requestedSessionId, nowMs, authority, existing, canMutate,
   });
 };
 
-/** @param {{ db?: any, authUid: string, input: any, nowMs?: number }} options */
-const updateNotificationDevice = async ({ db = admin.database(), authUid, input, nowMs = Date.now() }) => {
+/** @param {{ db?: any, authUid: string, input: any, nowMs?: number, clock?: () => number }} options */
+const updateNotificationDevice = async ({ db = admin.database(), authUid, input, nowMs = Date.now(), clock = Date.now }) => {
   const action = String(input?.action || 'reconcile').trim();
   if (!DEVICE_ACTIONS.has(action)) return { status: 400, body: { success: false, reason: 'INVALID_ACTION' } };
   const ref = db.ref(`notification_devices/${authUid}`);
   const operationOwner = randomUUID();
-  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'notification_device', owner: operationOwner, nowMs });
+  const sessionLock = await acquireAppSessionLock({ db, authUid, operation: 'notification_device', owner: operationOwner, nowMs, clock });
   if (!sessionLock.acquired) return { status: 409, body: { success: false, reason: 'SESSION_IN_PROGRESS' } };
   let deviceLock = null;
   try {
     deviceLock = await acquireNotificationDeviceLock({ db, authUid, owner: operationOwner, nowMs });
     if (!deviceLock.acquired) return { status: 409, body: { success: false, reason: 'DEVICE_UPDATE_IN_PROGRESS' } };
-    return await processLockedNotificationDeviceUpdate({ db, ref, authUid, input, action, nowMs });
+    return await processLockedNotificationDeviceUpdate({ db, ref, authUid, input, action, nowMs, clock,
+      expiresAtMs: sessionLock.lock.expiresAtMs });
   } finally {
     if (deviceLock?.acquired) await releaseNotificationDeviceLock({ lockRef: deviceLock.lockRef, owner: operationOwner });
     await releaseAppSessionLock({ db, authUid, owner: operationOwner });

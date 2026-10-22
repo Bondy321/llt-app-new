@@ -65,6 +65,17 @@ test('a JavaScript mobile bundle change is eligible for automatic TestFlight OTA
   assert.equal(plan.reason, 'mobile-bundle-change');
 });
 
+test('mobile changes coupled to Functions or rules require explicit delivery after backend release', () => {
+  for (const backendPath of ['functions/src/domains/app-sessions/sessionFunctions.js',
+    'database.rules.json', 'storage_rules.json', 'firebase.json']) {
+    const plan = createUpdatePlan({ eventName: 'push',
+      changedPaths: ['src/app/AppShell.js', backendPath] });
+    assert.equal(plan.shouldPublish, false, backendPath);
+    assert.equal(plan.reason, 'backend-change-manual-required');
+    assert.equal(plan.bundleChanged, true);
+  }
+});
+
 test('native and unknown changes default to a manual release boundary', () => {
   const nativePlan = createUpdatePlan({
     eventName: 'push',

@@ -1,4 +1,5 @@
 import { recordLoginCompleted } from '../session/loginSessionPhases';
+import { ownsDriverLogin } from '../session/driverLoginOwnership';
 
 const persistDriverIdentity = async (deps, context) => {
   const {
@@ -24,6 +25,7 @@ const persistDriverIdentity = async (deps, context) => {
       driverId: identity.id,
       assignedTourId,
     }, diagnosticsContext);
+    if (!ownsDriverLogin(deps, context)) return;
     const persisted = await persistDriverIdentityForUser({
       authUid,
       driverId: identity.id,
@@ -76,10 +78,12 @@ const saveDriverOfflinePack = async (deps, context, driverSessionData) => {
     tourId: tour.id,
     driverId: identity.id,
   }, diagnosticsContext);
+  if (!ownsDriverLogin(deps, context)) return;
   await offlineSyncService.saveTourPack(tour.id, 'driver', {
     tour: tourDetails,
     driver: driverSessionData,
   }, { ownerId: identity.id });
+  if (!ownsDriverLogin(deps, context)) return;
   await offlineSyncService.setTourPackMeta(
     tour.id,
     'driver',
@@ -101,11 +105,16 @@ const saveDriverSession = async (deps, context, destination, driverSessionData) 
     tourId: tour.id || null,
     driverId: identity.id || null,
   }, diagnosticsContext);
-  await saveSession({
+  if (!ownsDriverLogin(deps, context)) return;
+  const saved = await saveSession({
     tourData: tourDetails || null,
     bookingData: driverSessionData,
     currentScreen: postLoginScreen,
+    expectedAppSession: context.verifiedAppSession,
   });
+  if (!saved && ownsDriverLogin(deps, context)) {
+    throw new Error('The driver session could not be saved securely. Please try again.');
+  }
   await loginDiagnostics.recordLoginDiagnostic('driver_session_save_succeeded', {
     postLoginScreen,
     tourId: tour.id || null,
@@ -140,6 +149,7 @@ const establishDriverState = (deps, context, destination, driverSessionData) => 
 };
 
 export const runDriverLogin = async (deps, context, destination) => {
+  if (!ownsDriverLogin(deps, context)) return;
   const {
     driverTourPackService,
     logger,
@@ -160,9 +170,13 @@ export const runDriverLogin = async (deps, context, destination) => {
 
   logger.info('Auth', 'Driver Logged In', { driverId: maskIdentifier(identity.id) });
   await persistDriverIdentity(deps, context);
-  establishDriverState(deps, context, destination, driverSessionData);
+  if (!ownsDriverLogin(deps, context)) return;
+  context.phase = 'projecting';
   await saveDriverOfflinePack(deps, context, driverSessionData);
+  if (!ownsDriverLogin(deps, context)) return;
   await saveDriverSession(deps, context, destination, driverSessionData);
+  if (!ownsDriverLogin(deps, context)) return;
+  establishDriverState(deps, context, destination, driverSessionData);
   if (destination.shouldOnboardNotifications) {
     setScreenParams({ isOnboarding: true, audience: 'driver', returnTo: 'DriverHome' });
   }

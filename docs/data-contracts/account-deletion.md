@@ -61,6 +61,13 @@ Any missing, stale, ambiguous or contradictory authority fails before reservatio
 session returns `SESSION_CHANGED`. An active deletion returns the existing operation only when it is
 the same receipt-derived deletion; it cannot be replaced by a second receipt.
 
+The internal reservation boundary validates `expectedSessionId` before any lock and supplies that
+captured ID to the revision-advancing session admission. A stale A request must leave the complete
+successor B session and notification binding unchanged, not merely preserve B's ID. The acquired
+lock alone does not establish an exact match: the downstream trusted-scope check still rejects a
+mismatched current record before creating any deletion job, barrier or tombstone. This preserves B's
+registered operational revision through a later driver assignment.
+
 An accepted response is a safe status projection:
 
 ```json

@@ -5,6 +5,13 @@ The implementation started from that exact clean main revision, without resettin
 or discarding user work. This document describes repository changes; a merge is
 not evidence of a Firebase deployment or an installed mobile update.
 
+**Sign-off correction:** the independent review found four blocking interactions
+in this revision. Its original test totals below are historical evidence, not
+source acceptance. See [the correction record](./wave1-signoff-corrections-2026-10-22.md)
+for W1R-01 through W1R-04, current evidence and the explicit deployment overlap
+condition. F04 has narrow cold-cache acceptance; it does not establish general
+notification attempt/count/queue correctness.
+
 ## Findings and evidence
 
 | Finding | Repair | Regression evidence |
@@ -158,26 +165,36 @@ release work, in the order above.
 
 ## Separately recorded follow-ups
 
-1. **Already-dispatched issuance write:** atomic issuance retains its existing
-   multi-root update. Both HTTPS login handlers explicitly time out after 60s;
-   the issuance lease is 180s and its live clock/ownership is checked immediately
-   before dispatch, after all barrier work. Expired pre-dispatch issuers are
-   rejected and tested. An arbitrarily paused already-dispatched database write
-   is not independently CAS-fenced. Do not describe this as a general solution
-   for arbitrary delayed writers. The repaired stale-cleanup writes themselves
-   compare authority at their actual transaction boundaries.
-2. **Notification attempt aggregation:** the existing attempt/counter/queue
-   multi-path transition after provider work is not independently conditional.
-   Normal fanout (90s) and receipt (60s) runtimes are below the 120s lease, but an
-   arbitrarily suspended helper beyond that runtime can overwrite a successor
-   attempt. A durable attempt CAS/counter/queue protocol requires a separate
-   coordinated repair; the Wave 1 cold-cache fix does not claim to implement it.
+1. **Already-queued issuance write:** the independent review reproduced a real
+   SDK-queued multi-root issuance update overwriting a successor after the old
+   lease expires in both the original base and Wave 1. The 60-second HTTP timeout,
+   180-second lease and fresh pre-dispatch check do not cancel an already-queued
+   write. Track a separate conditional issuance/publication protocol with actual
+   queued-write and crash-boundary regressions. Canonical cleanup CAS protection
+   is narrower and must not be presented as general delayed-writer safety.
+2. **Notification attempt aggregation:** the independent review reproduced this
+   in both base and merge within the ordinary runtime/lease window. A parallel
+   preparation error releases the job while a sibling's initial publication is
+   pending. A successor at logical T+31 seconds publishes that prepared attempt;
+   the old sibling resumes and counts it again. Two recipients receive two
+   provider sends, both attempts become `provider_accepted`, and retry/receipt
+   queues empty, but job and broadcast remain `retrying` with a phantom retrying
+   count of one. Ordinary terminal retention is therefore ineligible. This case
+   did not demonstrate duplicate pushes. Track an idempotent attempt/count/queue
+   publication repair with failure and crash-boundary tests. Cold-cache progress
+   acceptance alone does not close this accounting defect.
 3. **Development-tool audit:** the full root graph retains three residual
    moderate findings (`@google-cloud/pubsub`, `@opentelemetry/core` and
    `firebase-tools`) under the existing source-verified mitigation policy.
    Production has no unresolved findings; raw advisory totals are not zero.
    Functions and web-admin audits report zero vulnerabilities. No audit policy,
    dependency override or security threshold was weakened for this work.
+4. **Navigation storage after cleanup:** an already-issued navigation storage
+   batch can restore booking/tour seeds after remote cleanup succeeds while the
+   app-session key remains absent. This is incomplete local data removal, not
+   restored app authority. Assignment-task draining does not cover every storage
+   writer. Track a coherent all-writer persistence/cleanup protocol and test a
+   paused navigation batch across final deletion before claiming complete removal.
 
 These are separate bounds found during review, not hidden test skips. There are
 no production maintenance mutations or live flag changes in the verification.

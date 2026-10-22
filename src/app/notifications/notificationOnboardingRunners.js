@@ -1,3 +1,5 @@
+import { sameSessionIdentity } from '../../../services/appSessionTransition';
+
 export const runLoadNotificationOnboardingState = async ({ SESSION_KEYS, SessionStorage, logger }) => {
     try {
       const raw = await SessionStorage.multiGet([SESSION_KEYS.NOTIFICATION_ONBOARDING]);
@@ -48,11 +50,16 @@ export const runShouldShowNotificationOnboarding = async ({ NOTIFICATION_ONBOARD
     return true;
   };
 
-export const runHandleNotificationOnboardingComplete = async ({ homeScreen, navigateTo, saveNotificationOnboardingState, user }, {
+export const runHandleNotificationOnboardingComplete = async ({ appSessionRef, loginProjectionRef, homeScreen, navigateTo, saveNotificationOnboardingState, user }, {
   status,
   audience,
   returnTo
 }) => {
+    const login = audience === 'driver' ? loginProjectionRef?.current : null;
+    const ownsCompletion = () => !login || (loginProjectionRef.current === login
+      && sameSessionIdentity(login.verifiedAppSession, appSessionRef.current));
+    if (!ownsCompletion()) return;
+    if (login) login.onboardingPending = false;
     const normalizedStatus = status === 'completed' ? 'completed' : 'skipped';
     await saveNotificationOnboardingState({
       status: normalizedStatus,
@@ -60,5 +67,6 @@ export const runHandleNotificationOnboardingComplete = async ({ homeScreen, navi
       userId: user?.uid || null,
       updatedAt: new Date().toISOString(),
     });
+    if (!ownsCompletion()) return;
     navigateTo(returnTo || homeScreen, { from: 'NotificationPreferences', onboardingCompleted: normalizedStatus === 'completed' });
   };

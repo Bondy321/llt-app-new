@@ -10,6 +10,7 @@ import { runClearSessionState, runPurgeLocalSession, runHandleLogout } from './s
 import AppShellView from './AppShellView';
 import useNotificationSessionNavigation from './notifications/useNotificationSessionNavigation';
 import useLogoutLifecycle from './session/useLogoutLifecycle';
+import useLogoutStatus from './session/useLogoutStatus';
 import { runHandleSessionRevisionChange } from './session/sessionRevisionRunners';
 import useAccountDeletionShellLifecycle from './session/useAccountDeletionShellLifecycle';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -77,7 +78,7 @@ export default function AppShell() {
     appSessionRef.current = session;
     setAppSessionState(session);
   }, []);
-  const [logoutStatus, setLogoutStatus] = useState({ state: 'idle', error: null, diagnostic: null });
+  const { logoutStatus, logoutStatusRef, setLogoutStatus } = useLogoutStatus();
   const [accountDeletionStatus, setAccountDeletionStatus] = useState({ state: 'idle', phase: null, retryable: false, error: null, completedAtMs: null });
 
   const [driverSessionGeneration, setDriverSessionGeneration] = useState(0);
@@ -95,6 +96,8 @@ export default function AppShell() {
   const driverAssignmentChangeRef = useRef(null);
   const assignmentValidationSeqRef = useRef(0);
   const assignmentReconciliationRef = useRef(null);
+  const loginProjectionRef = useRef(null);
+  const loginAttemptRef = useRef(null);
   const assignmentContextRef = useRef(null);
   const offlineSessionScopeRef = useRef(null);
   const sessionGenerationRef = useRef(0);
@@ -193,9 +196,9 @@ export default function AppShell() {
         currentDriverLifecycleScope.tourId || '',
       ].join('|')
     : 'none';
-  assignmentContextRef.current = { appSession, bookingData, tourData, currentDriverLifecycleScope,
+  assignmentContextRef.current = { appSession, bookingData, tourData, currentDriverLifecycleScope, currentScreen,
     userUid: auth?.currentUser?.uid || user?.uid || null,
-    active: logoutStatus.state === 'idle' && accountDeletionStatus.state === 'idle' };
+    get active() { return logoutStatusRef.current.state === 'idle' && accountDeletionStatus.state === 'idle'; } };
 
   const refreshAppData = (...args) => runRefreshAppData({ bookingService, chatService, driverTourPackActionService, isConnected, logger, offlineSessionScope: offlineSessionScope === offlineSessionScopeRef.current && sessionOwnsScope(appSessionRef.current, offlineSessionScope) ? offlineSessionScope : null, offlineSyncService, photoService, processOfflineSafetyQueue }, ...args);
 
@@ -437,7 +440,7 @@ export default function AppShell() {
     appSession, appSessionService, appSessionRef,
     passengerTripActive: passengerTripEnabled() && !isDriverSession,
   }, overrides);
-  const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, appSessionService, appSessionRef, assignmentReconciliationRef, getCurrentContext: () => assignmentContextRef.current, sessionGenerationRef, offlineSyncService, stopDriverTracking: driverTracking.stop, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setAppSession, setBookingData, setCurrentScreen, setScreenParams, routeHistoryRef, setDriverSessionGeneration, setTourCode, setTourData }, ...args);
+  const handleDriverAssignmentChange = (...args) => runHandleDriverAssignmentChange({ SESSION_KEYS, appSessionService, appSessionRef, assignmentReconciliationRef, loginProjectionRef, getCurrentContext: () => assignmentContextRef.current, sessionGenerationRef, offlineSyncService, stopDriverTracking: driverTracking.stop, driverLifecyclePurgeRef, driverOperationalLifecycleService, driverTourPackService, logger, normalizeTourId, previousDriverOperationalScopeRef, realtimeDb, setAppSession, setBookingData, setCurrentScreen, setScreenParams, routeHistoryRef, setDriverSessionGeneration, setTourCode, setTourData }, ...args);
   driverAssignmentChangeRef.current = handleDriverAssignmentChange;
 
   useEffect(() => {
@@ -494,9 +497,9 @@ export default function AppShell() {
 
   const resolveOfflineLogin = (...args) => runResolveOfflineLogin({ SESSION_KEYS, SessionStorage, appSessionService, logger, maskIdentifier, offlineSyncService, resolveOfflineLoginFromCache }, ...args);
 
-  const handleLoginSuccess = (...args) => runHandleLoginSuccess({ IDENTITY_VERSION, appSessionService, auth, bookingService, driverLifecyclePurgeRef, driverTourPackService, getLoginTransitionDurationMs, identityBinding, joinTour, logger, loginDiagnostics, maskIdentifier, normalizePassengerEmail, offlineSyncService, persistDriverIdentityForUser, persistPassengerIdentityForUser, realtimeDb, recordCrashBreadcrumb, resetLoginTransition, resolveTourId, routeHistoryRef, saveSession, sessionGenerationRef, setAppSession, setBookingData, setCurrentScreen, setIdentityBinding, setLogoutStatus, setScreenParams, setTourCode, setTourData, shouldShowNotificationOnboarding, startLoginTransition, toRealtimeKeySegment, user }, ...args);
+  const handleLoginSuccess = (...args) => runHandleLoginSuccess({ IDENTITY_VERSION, SESSION_KEYS, appSessionRef, loginAttemptRef, loginProjectionRef, getCurrentContext: () => assignmentContextRef.current, appSessionService, auth, bookingService, driverLifecyclePurgeRef, driverTourPackService, getLoginTransitionDurationMs, identityBinding, joinTour, logger, loginDiagnostics, maskIdentifier, normalizePassengerEmail, offlineSyncService, persistDriverIdentityForUser, persistPassengerIdentityForUser, realtimeDb, recordCrashBreadcrumb, resetLoginTransition, resolveTourId, routeHistoryRef, saveSession, sessionGenerationRef, setAppSession, setBookingData, setCurrentScreen, setIdentityBinding, setLogoutStatus, setScreenParams, setTourCode, setTourData, shouldShowNotificationOnboarding, startLoginTransition, toRealtimeKeySegment, user }, ...args);
 
-  const handleNotificationOnboardingComplete = (...args) => runHandleNotificationOnboardingComplete({ homeScreen, navigateTo, saveNotificationOnboardingState, user }, ...args);
+  const handleNotificationOnboardingComplete = (...args) => runHandleNotificationOnboardingComplete({ appSessionRef, loginProjectionRef, homeScreen, navigateTo, saveNotificationOnboardingState, user }, ...args);
 
   useNotificationSessionNavigation({
     authUid: accountDeletionStatus.state === 'idle' ? user?.uid : null,
@@ -507,7 +510,7 @@ export default function AppShell() {
 
   const clearSessionState = (...args) => runClearSessionState({ SESSION_KEYS, SessionStorage, logger, routeHistoryRef, setBookingData, setCurrentScreen, setIdentityBinding, setScreenParams, setTourCode, setTourData }, ...args);
 
-  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, appSessionRef, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, logoutContextRef, previousDriverOperationalScopeRef, purgeDriverTracking: driverTracking.purgeScope, settleDriverAssignmentRetirement: () => settleDriverAssignmentRetirement(assignmentReconciliationRef), setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
+  const purgeLocalSession = (...args) => runPurgeLocalSession({ appSession, appSessionRef, auth, bookingData, clearSessionState, currentDriverLifecycleScope, driverLifecyclePurgeRef, localSessionCleanupService, logoutContextRef, previousDriverOperationalScopeRef, purgeDriverTracking: driverTracking.purgeScope, settleDriverAssignmentRetirement: () => settleDriverAssignmentRetirement(assignmentReconciliationRef, { pendingLoginWork: () => loginProjectionRef.current?.projectionTask }), setAppSession, setDriverSessionGeneration, tourData, user }, ...args);
 
   const handleLogout = (...args) => runHandleLogout({ appSession, appSessionService, auth, bookingData, currentDriverLifecycleScope, logger, logoutContextRef, purgeLocalSession, setAppSession, setLogoutStatus, stopDriverTracking: driverTracking.stop, tourData, user }, ...args);
 
@@ -517,7 +520,7 @@ export default function AppShell() {
       setAppSession, reconcileDriverSession: handleDriverAssignmentChange,
     }, event),
     disabled: initializing || Boolean(authError) || accountDeletionStatus.state !== 'idle', isConnected,
-    logoutContextRef, logoutStatus, purgeLocalSession, sessionGenerationRef,
+    logoutContextRef, logoutStatus, logoutStatusRef, purgeLocalSession, sessionGenerationRef,
     setCurrentScreen, setLogoutStatus,
     userUid: user?.uid,
   });

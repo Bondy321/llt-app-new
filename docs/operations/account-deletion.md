@@ -57,6 +57,41 @@ state.
 | `503 ACCOUNT_DELETION_UNAVAILABLE` | Rollout record is malformed or the service failed closed. | Restore an exact reviewed compatibility record through the normal controlled process; do not enable `server_only`. |
 | `404 ACCOUNT_DELETION_STATUS_UNAVAILABLE` | No job matches that receipt-derived ID. | Keep the local record and investigate request acceptance; never claim completion. |
 
+### Exact-session admission and revision fences
+
+Reservation validates the captured `expectedSessionId` before taking any lock and passes it into
+the revision-advancing `revoke` admission. A delayed request for session A must leave successor B's
+complete canonical record and notification binding unchanged, including their revisions. The
+downstream trusted-scope check remains mandatory: acquisition can succeed while preserving a
+mismatched current record, and is not evidence that the requested session matched. A stale request
+returns `409 SESSION_CHANGED` without creating a job, barrier or tombstone. Valid exact-session
+deletion and accepted receipt replay retain their existing behaviour.
+
+The shared-lock caller review distinguishes these contracts:
+
+- Captured-session mutations: deletion reservation, ordinary logout, explicitly scoped admin
+  revocation, expiry cleanup and policy cleanup pass the captured session ID before the fence.
+  Expiry cleanup also supplies the observed revision.
+- Intentional new issuance: passenger login orchestration and passenger/driver issuance take an
+  `issue` lock against the current authority, then install the verified replacement atomically.
+- Supported current-session administration: admin revocation may intentionally omit a captured
+  ID and target the current record, with its existing operations-admin authorization and validation.
+- Accepted deletion completion: `finalizeCompletedAccountDeletion` retains its existing `revoke`
+  lock after private session scope has been shredded. The durable UID barrier and permanent
+  tombstone prevent legitimate replacement issuance; completion is fenced by its job lease,
+  phase and revision. It is not a new client deletion admission.
+- Non-advancing admissions: assignment, notification registration, role-claim cleanup, tracking
+  Stop and pickup keep their own exact authority checks. Assignment advances session revision
+  together with its notification binding; registration does not advance it.
+
+`tests/accountDeletionAdmission.emulator.test.js` uses actual issuance, device registration,
+reservation and assignment reconciliation through fresh Admin apps against an explicit loopback
+demo project. It checks full successor records, continued driver delivery after reassignment,
+passenger and sibling authority, absent deletion roots for rejected requests, accepted driver and
+passenger controls, receipt replay and invalid-input rejection before admission. No transaction
+predicate is mocked. Run it through the normal login-emulator gate; production is never a test
+fixture.
+
 ## Triage sequence
 
 For an alert or stalled deletion, inspect only the private server state using approved operations

@@ -138,6 +138,41 @@ configuration are intentionally unchanged in this release because App Check is n
 for the app; enabling it requires a separate coordinated mobile/server rollout rather than a partial
 notification-only change.
 
+### Device cleanup ownership
+
+`notification_devices/{uid}/authoritySessionId` is server-controlled cleanup
+ownership, independent of operational delivery eligibility. Registration and
+preference reconciliation derive it from the authenticated UID's current, active,
+unexpired canonical app session, including the first unassigned-driver or
+marketing-only device. They never copy a client-supplied ID or retain an obsolete
+tag as evidence. A supplied session ID must match that verified authority;
+mismatched, missing or expired requested authority is an ignored stale mutation.
+The capability-reducing `logout` action also accepts exact server-owned device
+proof for an ended/expired session when no different canonical session exists:
+mobile ends the session before sending notification logout. This preserves
+consented marketing or removes the token without consent; it cannot enable
+operational delivery or authorise stale registration/preferences.
+Clients without a supplied session ID retain supported marketing-only behaviour:
+the server derives any current owner, or writes ownerless state while logged out.
+Consent, permission and operational eligibility keep their separate checks.
+
+Registration holds both existing locks without advancing the canonical session
+revision. Device transactions compare the observed owner, and device, consent
+and audience transactions check the captured absolute lease deadline against a
+fresh clock at their mutation boundary. A paused registration cannot resume
+writes after lease takeover, including after the device commit but before its
+consent/audience projections. Consent and audience revisions also preserve newer
+registration projections. Partial projection work remains repairable through the
+existing already-applied registration retry.
+
+Cleanup requires an exact `authoritySessionId`, or an exact legacy
+`operationalSessionId` when no ownership tag exists. Equality with a device
+snapshot is never proof of ownership. Unknown-owner legacy marketing state is
+preserved; canonical session revocation still removes operational access.
+Permanent account-deletion tombstones remain authoritative and block device
+recreation. Clients cannot write any notification-device field, including the
+ownership tag; this existing RTDB rule boundary is unchanged.
+
 ## Coordinated Expo enhanced-security procedure
 
 1. Create the Expo access token in Secret Manager and deploy server support with the secret bound.
