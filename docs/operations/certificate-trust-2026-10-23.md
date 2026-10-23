@@ -110,12 +110,31 @@ Local dependency installations were reused because all three npm dependency
 graphs are unchanged. PR CI performs clean `npm ci` on the final source. Record
 exact-head results separately; do not describe local runs as clean installations.
 
+The complete local `test:all` run passed **1,754 tests** with zero failures/skips;
+Functions were additionally checked on Node 22 (**671 passed**), login/session
+emulators (**89 passed**) and rules emulators (**223 passed**). Refactor verification,
+native/release configuration, web build/lint, efficiency and release audit passed.
+The audit still reports four unresolved **moderate development-tooling** records
+(`@google-cloud/pubsub`, `@opentelemetry/core`, `firebase-tools`, `ip-address`).
+There are no unresolved high/critical findings under the existing audited patch
+policy; raw registry labels are retained and verified mitigations remain visible.
+This is not a zero-advisory claim or a new exception to that policy.
+
 GitHub JavaScript actions use the runner-owned Node independently of setup-node.
 Check each final job's `Set up job` runner version as well as the selected Node
 guard. Official [runner 2.338.1 source](https://raw.githubusercontent.com/actions/runner/v2.338.1/src/Misc/externals.sh)
 packages Node 24.22.1; 2.338.0 packages the older 24.21.0. Latest release availability
 does not establish the runner actually used. EAS remote build execution remains
 unobserved because no binary build was authorized or needed.
+
+Initial PR validation was green: app run `39947049663` (all six required jobs)
+and importer run `39946925468` (fresh container build/tests). **Every job reported
+runner 2.338.0**, whose published runner source packages Node 24.21.0, below the
+incident security floor. The selected Node executable was independently verified
+as patched in all app jobs, but the runner-owned JavaScript-action executable was
+not directly inspected. Its patch status is an outstanding provider dependency;
+do not claim the entire GitHub-hosted environment is remediated from those green
+checks. Confirm an actually patched action runtime before release sign-off.
 
 ## Deployment and rollback
 
