@@ -12,6 +12,17 @@ The manifest endpoint requires an active assigned driver session. It rejects ina
 
 When source publication moves a booking to another tour, its retained passenger session does not grant access to the former tour through passenger HTTP endpoints. The shared session guard compares the canonical source-managed booking tour with the session tour. A fresh login establishes the destination scope; former boarding, participant and conversation history are preserved.
 
+An attested current source report can also transfer an older imported booking that
+lacks `sourceRoster` metadata. Admission requires the exact booking reference,
+consistent stored reference when present, an existing old tour, and no explicit
+manual/other owner; malformed existing roster metadata remains an error. The
+importer repeats admission under both tour leases and uses its normal durable
+transfer journal, preserving both boarding histories and manual additions. It
+assigns fresh passenger IDs with no legacy positive-status mapping, rather than
+inventing predecessor metadata. Retries retain that journal's identity epoch and
+archive. An old tour outside the current report keeps its prior confirmation;
+an unconfirmed historical tour is never falsely marked as a current ready roster.
+
 Boarding writes bind `rosterRevision`, the exact `passengerIdsJson` and one `P/B/N/R` status code per passenger to the current source roster. Rules reject stale generations, changed ordering, absent bookings and writes during publication. Optional compatibility arrays do not override the primitive encoded status sequence. Statuses follow passenger IDs through safe reorder and seat changes. Ambiguous identity changes require review; no positive boarding state is guessed. ID-less legacy statuses also require review because raw source positions cannot prove the order of the former deduplicated manifest. Their original values remain archived.
 
 The mobile cache retains up to 250 passengers per booking and a bounded 4 MiB serialized payload. Invalid or oversized responses preserve the last good cache. Offline actions carry roster identity; rejected stale actions become visible terminal failures requiring refresh, rather than silently replaying positional changes against a new passenger list.
