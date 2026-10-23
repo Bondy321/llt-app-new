@@ -94,9 +94,18 @@ const projectProductionPackageGraph = (packageJson, packageLock) => {
   return { root, packages };
 };
 
+// Node executes the build tooling; it is not shipped in the native application.
+// Exclude only that tool selection, retaining every other native build input.
+const omitBuildNode = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== 'node')
+    .map(([key, item]) => [key, ['android', 'ios'].includes(key) ? omitBuildNode(item) : item]));
+};
+
 const projectEasNativeBuildConfig = (eas) => ({
   appVersionSource: eas.cli?.appVersionSource || null,
-  build: eas.build || {},
+  build: Object.fromEntries(Object.entries(eas.build || {}).map(([name, profile]) => [name, omitBuildNode(profile)])),
 });
 
 const hashSelectedFiles = (files, predicate) => Object.fromEntries(

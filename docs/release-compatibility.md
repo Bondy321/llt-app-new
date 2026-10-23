@@ -21,13 +21,20 @@ The snapshot discovers and hashes:
 
 - root production dependencies, overrides, and the non-development lock graph;
 - `app.config.js` and its tracked local file/plugin references;
-- EAS native build profiles and app-version source;
+- EAS native build profiles and app-version source, excluding only the build
+  machine's `node` selection at profile or iOS/Android profile level;
 - every tracked custom config plugin beneath `plugins/`;
 - every tracked iOS or Android native-project file, including projects added later.
 
 A native-input change with the same runtime identity fails with the changed input
 categories and an instruction to bump `package.json`. Normal JavaScript source
 changes are deliberately outside this native snapshot.
+
+Node runs the build tools and is not embedded into the shipped native app. Its
+security patch selection is checked separately by
+`scripts/security/nodeRuntimeTrust.js`; it does not require a marketing/runtime
+version bump or a new binary by itself. Image, environment (including an env key
+named `node`), Gradle, plugins and all other native inputs remain covered.
 
 CI passes the exact pull-request/push base and head SHAs. A local invocation compares
 `HEAD` with the worktree so the guard can be run before committing.
@@ -57,6 +64,10 @@ mobile bundle are a no-op. Native or unknown changes stop at a manual/binary rel
 boundary. `workflow_dispatch` remains the explicit route after the matching binary
 is available, and every actual release still requires successful CI for the exact
 release SHA.
+
+Any `eas.json` change also requires explicit OTA delivery, including a build-only
+Node patch and changes combined with mobile JavaScript. This prevents a tooling
+security fix from publishing pending mobile changes automatically.
 
 The SDK-local Expo CLI is locked through `package-lock.json`; release workflows pin EAS CLI to
 `22.6.0` in `eas.json` and every release workflow. App Check remains intentionally

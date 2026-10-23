@@ -121,3 +121,33 @@ test('a relative config plugin outside the conventional plugins directory is cov
 
   assert.throws(() => compareNativeSnapshots(previous, changed), /configReferencedFiles/u);
 });
+
+test('Node build tooling alone does not change the shipped native compatibility identity', () => {
+  const previousFiles = makeFiles();
+  const changedFiles = makeFiles();
+  const config = JSON.parse(changedFiles['eas.json']);
+  config.build.production.node = '24.22.1';
+  changedFiles['eas.json'] = JSON.stringify(config);
+  assert.deepEqual(compareNativeSnapshots(buildNativeSnapshotFromFiles(previousFiles), buildNativeSnapshotFromFiles(changedFiles)).changedCategories, []);
+});
+
+test('Node exclusion never removes nested env values or other native build configuration', () => {
+  for (const change of [
+    { image: 'new-native-image' },
+    { env: { node: 'application-visible-setting' } },
+    { gradleCommand: ':app:customBuild' },
+  ]) {
+    const previousFiles = makeFiles();
+    const changedFiles = makeFiles();
+    const baseConfig = JSON.parse(previousFiles['eas.json']);
+    baseConfig.build.production.android = { node: '22.23.4' };
+    previousFiles['eas.json'] = JSON.stringify(baseConfig);
+    const config = structuredClone(baseConfig);
+    config.build.production.android = { node: '24.22.1' };
+    changedFiles['eas.json'] = JSON.stringify(config);
+    assert.deepEqual(compareNativeSnapshots(buildNativeSnapshotFromFiles(previousFiles), buildNativeSnapshotFromFiles(changedFiles)).changedCategories, []);
+    Object.assign(config.build.production.android, change);
+    changedFiles['eas.json'] = JSON.stringify(config);
+    assert.throws(() => compareNativeSnapshots(buildNativeSnapshotFromFiles(previousFiles), buildNativeSnapshotFromFiles(changedFiles)), /easNativeBuildConfig/u);
+  }
+});

@@ -97,6 +97,15 @@ test('workflow dispatch remains explicit and available even without a diff base'
   assert.equal(plan.reason, 'manual-dispatch');
 });
 
+test('EAS build configuration never auto-publishes a mobile update, including tool-only changes', () => {
+  for (const changedPaths of [['eas.json'], ['eas.json', 'screens/TourHomeScreen.js']]) {
+    const plan = createUpdatePlan({ eventName: 'push', changedPaths, nativeChanged: false });
+    assert.equal(plan.shouldPublish, false);
+    assert.equal(plan.reason, 'eas-config-change-manual-required');
+  }
+  assert.equal(createUpdatePlan({ eventName: 'workflow_dispatch', changedPaths: ['eas.json'] }).shouldPublish, true);
+});
+
 test('a test-script-only package change is a deterministic no-op', () => {
   const base = basePackage();
   const head = structuredClone(base);

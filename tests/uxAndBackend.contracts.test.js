@@ -845,7 +845,7 @@ test('Static contract: production binary EAS workflows gate release on mobile/ba
     const source = readText(relativePath);
     const workflowLines = source.split(/\r?\n/).map((line) => line.trim());
 
-    assert.match(source, /node-version:\s*24/);
+    assert.match(source, /node-version:\s*'24\.22\.1'/);
     assert.match(source, /functions\/package-lock\.json/);
     assert.match(source, /npm --prefix functions ci/);
     assert.match(source, /actions\/setup-java@v4/);
