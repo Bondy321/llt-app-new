@@ -59,11 +59,13 @@ npm run update:prod
 The helper owns channel, platform, EAS environment, `EAS_BUILD_PROFILE`, and the
 TestFlight eligibility flag; callers cannot override those routing options.
 
-Main pushes first run the read-only OTA planner. Changes that cannot affect the
-mobile bundle are a no-op. Native or unknown changes stop at a manual/binary release
-boundary. `workflow_dispatch` remains the explicit route after the matching binary
-is available, and every actual release still requires successful CI for the exact
-release SHA.
+Main pushes run the read-only OTA planner and never publish, including mobile-only
+changes. Native or unknown changes still identify the binary/review boundary.
+`workflow_dispatch` is the explicit publication route after the matching binary
+is available. It requires successful CI for the exact release SHA, that commit's
+installed runtime version and explicit confirmation that matching backend, rules
+and configuration prerequisites have been verified. This confirmation records
+operator acceptance; it is not automated proof of deployed state.
 
 Any `eas.json` change also requires explicit OTA delivery, including a build-only
 Node patch and changes combined with mobile JavaScript. This prevents a tooling

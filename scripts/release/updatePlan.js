@@ -146,8 +146,8 @@ const createUpdatePlan = ({
     };
   }
   return {
-    shouldPublish: true,
-    reason: 'mobile-bundle-change',
+    shouldPublish: false,
+    reason: 'mobile-bundle-change-manual-required',
     bundleChanged: true,
     nativeChanged: false,
     unknownPaths,

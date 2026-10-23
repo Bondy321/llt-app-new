@@ -37,6 +37,9 @@ test('the TestFlight OTA workflow has an explicit profile and a no-op planning g
   assert.match(source, /EAS_BUILD_PROFILE:\s*testflight/u);
   assert.match(source, /plan-update:/u);
   assert.match(source, /needs\.plan-update\.outputs\.should_publish/u);
+  assert.match(source, /github\.event_name == 'workflow_dispatch' && inputs\.prerequisites_verified == true/u);
+  assert.match(source, /LLT_REVIEWED_RUNTIME !== require\('\.\/package\.json'\)\.version/u);
+  assert.match(source, /verifyCiRunForSha\.js --sha=\$\{\{ github.sha \}\}/u);
   assert.match(source, /npm run update:testflight/u);
 });
 
