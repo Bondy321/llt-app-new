@@ -68,21 +68,23 @@ jobs:
           git fetch origin main --depth=1
           git merge-base --is-ancestor ${{ github.sha }} origin/main
 
-      - name: Require successful CI for exact release SHA
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
-
       - name: Setup Node.js 24
-        if: ${{ !inputs.eas_build_id }}
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: |
             package-lock.json
             functions/package-lock.json
             web-admin/package-lock.json
+
+      - name: Verify Node certificate-security baseline
+        run: node scripts/security/nodeRuntimeTrust.js
+
+      - name: Require successful CI for exact release SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
 
       - name: Setup Java for Firebase emulators
         if: ${{ !inputs.eas_build_id }}
@@ -319,9 +321,12 @@ jobs:
       - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Verify Node certificate-security baseline
+        run: node scripts/security/nodeRuntimeTrust.js
 
       - name: Install dependencies
         run: npm ci

@@ -60,7 +60,7 @@
     "security:audit:production": "node scripts/security/audit.js --omit=dev",
     "security:audit:release": "npm run security:audit:production && node scripts/security/audit.js",
     "sync:eas-env:production": "node scripts/syncEasEnvFromProcess.js --environment=production",
-    "eas-build-pre-install": "node scripts/validateExpoPublicEnv.js",
+    "eas-build-pre-install": "node scripts/security/nodeRuntimeTrust.js && node scripts/validateExpoPublicEnv.js",
     "build:dev:ios": "eas build --profile development --platform ios --environment development",
     "build:dev:android": "eas build --profile development --platform android --environment development",
     "build:dev:ios-device": "eas build --profile development-device --platform ios --environment development",

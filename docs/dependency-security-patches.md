@@ -62,3 +62,27 @@ upgrade the affected dependency tree, remove its patch definition and manifest
 entry, and require the raw audit plus regression tests to pass. Advisory record
 changes deliberately force a fresh review; there is no time-based blanket
 exception, advisory ignore list, or replacement package version.
+# Node runtime certificate-security baseline (23 October 2026)
+
+CI pins Node `22.23.4` for Functions tests and `24.22.1` for tooling, admin,
+and mobile tests. EAS build profiles inherit Node `24.22.1`. The standalone
+`node scripts/security/nodeRuntimeTrust.js` guard runs before CI package installs
+and in EAS's pre-install hook. It rejects unsupported major/prerelease versions,
+versions below those security floors, empty/malformed CA stores, disabled TLS
+verification, and the affected emSign ECC Root CA - G3 in either the bundled or
+effective default trust store. No package installation is needed to run it.
+
+The [Node security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)
+includes updated certificates and rejection of compromised intermediate public
+keys. Root removal alone does not substitute for the patched executable. The
+public certificate fixture under `tests/security/fixtures/` is used only to prove
+that the guard rejects the compromised trust anchor; it is never installed as a CA.
+
+Functions remain on managed `nodejs22`. CI verification does not prove Google's
+serving runtime patch. Read the deployed function's `automaticUpdatePolicy` or
+`onDeployUpdatePolicy`, then correlate current serving logs' base-image version
+with the exact image and Node patch. Automatic updates can change the base image
+without a new function revision, so a historical build log is insufficient.
+See [Google's security policy](https://docs.cloud.google.com/functions/docs/securing/execution-environment-security)
+and [serving base-image evidence](https://docs.cloud.google.com/run/docs/configuring/services/automatic-base-image-updates).
+Never deploy unrelated pending application changes merely to refresh a runtime.

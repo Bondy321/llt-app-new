@@ -4,7 +4,7 @@ Welcome, Agent. This file is the operational source of truth for contributors wo
 
 For the current launch work, the user authorizes committing and pushing completed fixes directly to `main`. Keep the implementation and required verification standards; use a short implement, verify, push loop without adding staged rollout or PR approval steps. Record any required service deployment and live checks truthfully; a Git push alone does not make backend changes live.
 
-Last updated: October 22, 2026
+Last updated: October 23, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 Source membership, cancellation and boarding identity are specified in `docs/data-contracts/source-passenger-roster.md`. Missing passenger email is expected roster-only data, not an import error. Preserve private archives, manual additions, generation fences and encoded boarding identity; never infer source membership from pickup/email reports or merge old positional history into a new roster.
@@ -76,6 +76,7 @@ Functions:
 
 - Cloud Functions Gen 2 only
 - Node runtime target `22`
+- Node security floor: `22.23.4` for Functions verification; `24.22.1` for CI/EAS tooling. Run `node scripts/security/nodeRuntimeTrust.js` before dependency installation or release tools. It checks the executable and bundled/effective CA stores; a managed `nodejs22` label alone is not deployed patch evidence. See `docs/dependency-security-patches.md`.
 - `firebase-functions 7.3.2` (lockfile resolution)
 - `firebase-admin 13.10.0` (lockfile resolution)
 - `expo-server-sdk 4.0.0` (lockfile resolution)

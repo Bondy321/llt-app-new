@@ -122,6 +122,17 @@ const createUpdatePlan = ({
       unknownPaths,
     };
   }
+  // Build-tool configuration does not itself need an OTA. Keep combined changes
+  // manual too: a successful source merge does not authorize a mobile release.
+  if (classified.some(({ fileName }) => fileName === 'eas.json')) {
+    return {
+      shouldPublish: false,
+      reason: 'eas-config-change-manual-required',
+      bundleChanged,
+      nativeChanged: false,
+      unknownPaths: [],
+    };
+  }
   // A merge cannot prove that coupled backend authority/rules are deployed.
   // Explicit dispatch remains available after the recorded dependency order.
   if (classified.some(({ fileName }) => fileName.startsWith('functions/')

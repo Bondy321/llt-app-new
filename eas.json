@@ -6,6 +6,7 @@
   },
   "build": {
     "base": {
+      "node": "24.22.1",
       "env": {
         "EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT": "false"
       }
