@@ -59,10 +59,10 @@ test('main pushes with only known non-bundle paths are deterministic no-ops', ()
   assert.equal(plan.reason, 'no-mobile-bundle-change');
 });
 
-test('a JavaScript mobile bundle change is eligible for automatic TestFlight OTA', () => {
+test('a JavaScript mobile bundle change requires explicit TestFlight publication', () => {
   const plan = createUpdatePlan({ eventName: 'push', changedPaths: ['screens/TourHomeScreen.js'] });
-  assert.equal(plan.shouldPublish, true);
-  assert.equal(plan.reason, 'mobile-bundle-change');
+  assert.equal(plan.shouldPublish, false);
+  assert.equal(plan.reason, 'mobile-bundle-change-manual-required');
 });
 
 test('mobile changes coupled to Functions or rules require explicit delivery after backend release', () => {
@@ -148,18 +148,18 @@ test('Functions operational script changes remain outside the mobile bundle', ()
   assert.equal(plan.reason, 'no-mobile-bundle-change');
 });
 
-test('a mobile runtime script change is eligible for OTA publication', () => {
+test('a mobile runtime script change requires explicit OTA publication', () => {
   const base = basePackage();
   const head = structuredClone(base);
   head.scripts.start = 'expo start --clear';
 
   const plan = packagePlan({ base, head });
 
-  assert.equal(plan.shouldPublish, true);
-  assert.equal(plan.reason, 'mobile-bundle-change');
+  assert.equal(plan.shouldPublish, false);
+  assert.equal(plan.reason, 'mobile-bundle-change-manual-required');
 });
 
-test('a pure-JavaScript production dependency and matching lock update are eligible for OTA', () => {
+test('a pure-JavaScript production dependency and matching lock update require explicit OTA', () => {
   const base = basePackage();
   const head = structuredClone(base);
   head.dependencies.firebase = '12.1.0';
@@ -176,8 +176,8 @@ test('a pure-JavaScript production dependency and matching lock update are eligi
     changedPaths: ['package.json', 'package-lock.json'],
   });
 
-  assert.equal(plan.shouldPublish, true);
-  assert.equal(plan.reason, 'mobile-bundle-change');
+  assert.equal(plan.shouldPublish, false);
+  assert.equal(plan.reason, 'mobile-bundle-change-manual-required');
 });
 
 test('a pure-JavaScript direct update with a native transitive lock change requires a binary', () => {

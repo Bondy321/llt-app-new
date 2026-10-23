@@ -5,6 +5,16 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      runtime_version:
+        description: 'Reviewed installed binary runtime (must match this commit)'
+        required: true
+        type: string
+      prerequisites_verified:
+        description: 'Matching backend, rules, configuration and binary acceptance have been verified'
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: eas-update-testflight
@@ -33,7 +43,7 @@ jobs:
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
 
-      - name: Plan automatic TestFlight OTA
+      - name: Plan TestFlight OTA (pushes never publish)
         id: plan
         env:
           LLT_RELEASE_BASE_SHA: ${{ github.event.before }}
@@ -41,7 +51,7 @@ jobs:
 
   publish-testflight-update:
     needs: plan-update
-    if: ${{ needs.plan-update.outputs.should_publish == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prerequisites_verified == true && needs.plan-update.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -94,6 +104,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
+
+      - name: Require the reviewed installed binary runtime
+        env:
+          LLT_REVIEWED_RUNTIME: ${{ inputs.runtime_version }}
+        run: node -e "if (process.env.LLT_REVIEWED_RUNTIME !== require('./package.json').version) throw new Error('Reviewed binary runtime does not match release commit')"
 
       - name: Install dependencies
         run: npm ci

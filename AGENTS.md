@@ -1289,8 +1289,7 @@ npm run update:prod
 
 All update scripts route through `scripts/release/runEasUpdate.js`, set the exact
 `EAS_BUILD_PROFILE`/channel/environment tuple, and run profile-parity checks before
-invoking EAS CLI (the workflows pin version 22.6.0 and `eas.json` enforces the same version). CI uses the deterministic path-aware no-op gate
-for a `main` push and retains an explicit manual dispatch. Never call bare
+invoking EAS CLI (the workflows pin version 22.6.0 and `eas.json` enforces the same version). Every `main` push is planning-only and cannot publish an OTA, including mobile-only changes. Publication requires explicit manual dispatch, successful CI for the exact commit, a matching reviewed installed runtime and confirmation of backend/rules/configuration prerequisites. Never call bare
 `eas update` from a release workflow.
 
 Automatic OTA planning requires manual dispatch when a mobile bundle change is
