@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getDatabase, onValue, ref } from "firebase/database";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken } from 'firebase/app-check';
 import {
   getRuntimeDebugContext,
   isFirebaseDebugEnabled,
@@ -38,6 +39,7 @@ logFirebaseDebug('module:loaded', {
 let app;
 let auth;
 let db;
+let appCheck;
 
 const initTimer = startFirebaseDebugTimer('init', {
   config: summarizeFirebaseConfig(firebaseConfig),
@@ -45,6 +47,14 @@ const initTimer = startFirebaseDebugTimer('init', {
 
 try {
   app = initializeApp(firebaseConfig);
+  if (import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY) {
+    appCheck = initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } else if (import.meta.env.PROD) {
+    throw new Error('Admin App Check site key is required for a production build');
+  }
   auth = getAuth(app);
   db = getDatabase(app);
   initTimer.success({
@@ -113,4 +123,12 @@ const startRealtimeConnectionDiagnostics = () => {
 
 startRealtimeConnectionDiagnostics();
 
-export { app, auth, db };
+const getAdminAppCheckToken = async () => {
+  if (!appCheck) {
+    if (import.meta.env.PROD) throw new Error('Admin App Check is not configured');
+    return null;
+  }
+  return (await getToken(appCheck, false)).token;
+};
+
+export { app, auth, db, getAdminAppCheckToken };

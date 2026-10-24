@@ -15,14 +15,19 @@ const deriveTrustedAccountDeletionScope = async ({ db, authUid, expectedSessionI
   if (!db?.ref || !isValidFirebaseKey(authUid) || !isValidAppSessionId(expectedSessionId)) {
     return scopeFailure('INVALID_INPUT');
   }
-  const [sessionSnapshot, profileSnapshot, deviceSnapshot] = await Promise.all([
+  const [sessionSnapshot, profileSnapshot, deviceSnapshot, authoritySnapshot] = await Promise.all([
     db.ref(`app_sessions/${authUid}`).once('value'),
     db.ref(`users/${authUid}`).once('value'),
     db.ref(`notification_devices/${authUid}`).once('value'),
+    db.ref(`app_session_authority/${authUid}`).once('value'),
   ]);
   const session = sessionSnapshot.val();
   const profile = profileSnapshot.val();
   const notificationDevice = deviceSnapshot.val() || null;
+  const authority = authoritySnapshot.val();
+  if (authority?.schemaVersion !== 1 || authority.state !== 'committed'
+    || !/^[a-f0-9]{48}$/.test(authority.epoch || '')
+    || authority.sessionId !== expectedSessionId) return scopeFailure('SESSION_CHANGED');
   if (!isActiveSessionRecord(session, { nowMs }) || session.authUid !== authUid
     || session.sessionId !== expectedSessionId || !profile || typeof profile !== 'object') {
     return scopeFailure(session?.sessionId && session.sessionId !== expectedSessionId

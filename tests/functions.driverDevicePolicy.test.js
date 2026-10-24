@@ -336,11 +336,26 @@ test('off-mode notification fanout includes every current driver handset but on-
         }) }) }),
       };
       if (path === 'driver_login_policy/v1') return { once: async () => snapshot(policy) };
+      if (path.startsWith('app_sessions/')) return { once: async () => snapshot(session(path.split('/')[1], 3)) };
+      if (path === 'drivers/D1') return { once: async () => snapshot(driverData) };
+      if (path === 'driver_assignment_active/v1/D1') return { once: async () => snapshot(null) };
+      if (path === 'tour_manifests/TOUR_1/assigned_drivers/D1') return { once: async () => snapshot(true) };
+      if (path === 'driver_staff_policy/D1') return { once: async () => snapshot({ schemaVersion: 1, generation: 'c'.repeat(48) }) };
+      if (path.startsWith('driver_device_authorizations/')) {
+        const uid = path.split('/')[1];
+        return { once: async () => snapshot({ schemaVersion: 1, state: 'active', driverId: 'D1',
+          sessionId: session(uid, 3).sessionId, generation: 'c'.repeat(48) }) };
+      }
+      if (path.startsWith('app_session_authority/')) {
+        const uid = path.split('/')[1];
+        return { once: async () => snapshot({ schemaVersion: 1, state: 'committed', epoch: 'd'.repeat(48),
+          sessionId: session(uid, 3).sessionId }) };
+      }
       if (path.startsWith('users/')) return { once: async () => snapshot(profiles[path.slice('users/'.length)]) };
       throw new Error(`Unexpected ref: ${path}`);
     },
   };
-  const driverData = { authUid: 'uid-a', currentTourId: 'TOUR_1' };
+  const driverData = { authUid: 'uid-a', currentTourId: 'TOUR_1', authUidStaffGeneration: 'c'.repeat(48) };
   assert.deepEqual(await __testables.loadDriverSessionAuthUids('D1', {
     db, tourId: 'TOUR_1', driverData, nowMs,
   }), ['uid-a', 'uid-b']);

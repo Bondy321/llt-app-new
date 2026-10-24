@@ -49,7 +49,7 @@ const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, [ADMIN_UID, DELEGATED_ADMIN_UID].includes(uid) ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 const unauthenticatedDb = () => testEnv.unauthenticatedContext().database(dbUrl);
 
 const seedState = async (rollout) => {
@@ -238,12 +238,12 @@ test('terminal warnings remain operations-readable and client-write denied', asy
   await assertFails(dbFor(DELEGATED_ADMIN_UID).ref(warningPath).remove());
 });
 
-test('missing rollout preserves all five compatibility deletion permissions', async () => {
-  await assertLegacyDeletionMatrix({ rollout: undefined, allowed: true });
+test('missing rollout denies all five obsolete direct deletion permissions', async () => {
+  await assertLegacyDeletionMatrix({ rollout: undefined, allowed: false });
 });
 
-test('valid explicit compatibility rollout preserves all five deletion permissions', async () => {
-  await assertLegacyDeletionMatrix({ rollout: VALID_COMPATIBILITY, allowed: true });
+test('obsolete explicit compatibility cannot restore direct deletion permissions', async () => {
+  await assertLegacyDeletionMatrix({ rollout: VALID_COMPATIBILITY, allowed: false });
 });
 
 test('valid server-only rollout blocks all five legacy deletion permissions', async () => {
@@ -335,6 +335,9 @@ test('a second handset cannot remove another driver session ownership scalar', a
 test('ordinary profile, log, chat, caption, notification, and live-state writes survive both rollout phases', async () => {
   for (const rollout of [VALID_COMPATIBILITY, VALID_SERVER_ONLY]) {
     await seedState(rollout);
+    // Normal-operation fixture: a real admitted deletion supersedes the session
+    // and fences safety sharing; the private-root fixtures above are not active here.
+    await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(`account_deletion_active/v1/${PASSENGER_AUTH_UID}`).remove());
     const db = dbFor(PASSENGER_AUTH_UID);
 
     await assertSucceeds(db.ref(`users/${PASSENGER_AUTH_UID}/appVersion`).set('1.2.3'));

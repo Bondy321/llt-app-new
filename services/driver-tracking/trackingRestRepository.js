@@ -5,7 +5,7 @@ import { withTrackingTimeout } from './withTrackingTimeout.js';
 // Background tracking uses independent, acknowledged HTTP requests. A suspended
 // RTDB socket must neither prevent publication nor delete an HTTP-owned source.
 // Never expose URLs, tokens or coordinates in transport errors or logs.
-export const createTrackingRestRepository = ({ auth, baseUrl, retireEndpoint,
+export const createTrackingRestRepository = ({ auth, baseUrl, retireEndpoint, getAppCheckToken,
   fetchFn = (...args) => fetch(...args), timeoutMs = 10_000, now = Date.now }) => {
   const request = async ({ path, payload, expectedUid, endpoint, method = 'PUT',
     isScopeCurrent = () => true, readBody = false }) => {
@@ -21,6 +21,7 @@ export const createTrackingRestRepository = ({ auth, baseUrl, retireEndpoint,
       const currentUser = auth.currentUser;
       if (!currentUser || currentUser.uid !== expectedUid) throw new Error('AUTH_UID_CHANGED');
       const token = await currentUser.getIdToken();
+      const appCheckToken = await getAppCheckToken();
       assertCurrent();
       if (auth.currentUser?.uid !== expectedUid) throw new Error('AUTH_UID_CHANGED');
       let url = endpoint;
@@ -35,6 +36,7 @@ export const createTrackingRestRepository = ({ auth, baseUrl, retireEndpoint,
       assertCurrent();
       const response = await fetchFn(url, {
         method, headers: { 'Content-Type': 'application/json',
+          ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
           ...(endpoint ? { Authorization: `Bearer ${token}` } : {}) },
         ...(method === 'GET' ? {} : { body: JSON.stringify(payload) }), signal: controller.signal,
       });

@@ -30,7 +30,7 @@ const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, [ADMIN_UID, ADMIN_ROLE_UID].includes(uid) ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 const buildReport = (overrides = {}) => ({
   schemaVersion: 1,
@@ -153,9 +153,10 @@ test('keeps reporter reports read-only after creation while allowing admin revie
   await assertSucceeds(dbFor(ADMIN_ROLE_UID).ref('content_reports/report_review_1/status').set('reviewing'));
 });
 
-test('allows admin users to remove reported chat messages and group photos', async () => {
+test('allows admin chat moderation but requires server-owned photo deletion', async () => {
   await assertSucceeds(dbFor(ADMIN_ROLE_UID).ref(`chats/${TOUR_ID}/messages/message_1`).remove());
-  await assertSucceeds(dbFor(ADMIN_ROLE_UID).ref(`group_tour_photos/${TOUR_ID}/photo_1`).remove());
+  // Removing metadata directly would orphan the owned Storage bytes and audit.
+  await assertFails(dbFor(ADMIN_ROLE_UID).ref(`group_tour_photos/${TOUR_ID}/photo_1`).remove());
 });
 
 test('denies malformed or status-mutated report creation', async () => {

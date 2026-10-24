@@ -11,7 +11,7 @@ Module._load = function mockedLoad(request, _parent, _isMain) {
       rotate: () => ({
         resize: () => ({
           jpeg: () => ({
-            toBuffer: async () => Buffer.from([]),
+            toBuffer: async () => Buffer.from('synthetic variant'),
           }),
         }),
       }),
@@ -1042,7 +1042,8 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   const storageBucket = {
     file: (path) => ({
       download: async () => [Buffer.from('source')],
-      getMetadata: async () => [{ metadata: { authUid: 'auth-1' } }],
+      getMetadata: async () => [{ generation: path.includes('/viewers/') || path.includes('/thumbnails/') ? 'variant-generation' : 'source-generation', size: '17',
+        metadata: saveMetadataByPath[path] || { authUid: 'auth-1', uploadOperationId: 'operation-1' } }],
       setMetadata: async (metadata) => sourceMetadataUpdates.push(metadata),
       save: async (_buffer, options) => {
         assert.equal(updates[0]?.payload?.variantStatus, 'processing');
@@ -1085,12 +1086,13 @@ test('generatePhotoVariantsForRecord writes ready variant fields', async () => {
   assert.equal(updates.at(-1).payload.viewerUrl, null);
   assert.equal(updates.at(-1).payload.thumbnailUrl, null);
   assert.deepEqual(saveMetadataByPath['group_tour_photos/tour-1/viewers/source_viewer.jpg'], {
-    visibility: 'group', sourceRole: 'viewer',
+    visibility: 'group', sourceRole: 'viewer', sourcePath: 'group_tour_photos/tour-1/source.jpg', sourceGeneration: 'source-generation',
   });
   assert.deepEqual(saveMetadataByPath['group_tour_photos/tour-1/thumbnails/source_thumb.jpg'], {
-    visibility: 'group', sourceRole: 'thumbnail',
+    visibility: 'group', sourceRole: 'thumbnail', sourcePath: 'group_tour_photos/tour-1/source.jpg', sourceGeneration: 'source-generation',
   });
   assert.deepEqual(sourceMetadataUpdates, [{ metadata: {
+    authUid: 'auth-1', uploadOperationId: 'operation-1',
     visibility: 'group', sourceRole: 'source', firebaseStorageDownloadTokens: null,
   } }]);
 });
@@ -1103,14 +1105,16 @@ test('private variant generation revokes source tokens and creates path-only tok
   const storageBucket = {
     file: (path) => (path === sourcePath ? {
       download: async () => [Buffer.from('source')],
-      getMetadata: async () => [{ metadata: {
+      getMetadata: async () => [{ generation: 'source-generation', metadata: {
         authUid: 'auth-1',
+        uploadOperationId: 'operation-1',
         bookingRef: 'must-be-removed',
         firebaseStorageDownloadTokens: 'legacy-token',
       } }],
       setMetadata: async (metadata) => sourceMetadataUpdates.push(metadata),
     } : {
       save: async (_buffer, options) => { savedMetadata[path] = options.metadata.metadata; },
+      getMetadata: async () => [{ generation: 'variant-generation', size: '17', metadata: savedMetadata[path] }],
     }),
   };
   const photoRecord = { storagePath: sourcePath };
@@ -1130,12 +1134,13 @@ test('private variant generation revokes source tokens and creates path-only tok
   assert.equal(result.status, 'ready');
   assert.deepEqual(sourceMetadataUpdates, [{ metadata: {
     authUid: 'auth-1',
+    uploadOperationId: 'operation-1',
     visibility: 'private',
     sourceRole: 'source',
     firebaseStorageDownloadTokens: null,
   } }]);
-  assert.deepEqual(savedMetadata[result.viewerPath], { visibility: 'private', sourceRole: 'viewer' });
-  assert.deepEqual(savedMetadata[result.thumbnailPath], { visibility: 'private', sourceRole: 'thumbnail' });
+  assert.deepEqual(savedMetadata[result.viewerPath], { visibility: 'private', sourceRole: 'viewer', sourcePath, sourceGeneration: 'source-generation' });
+  assert.deepEqual(savedMetadata[result.thumbnailPath], { visibility: 'private', sourceRole: 'thumbnail', sourcePath, sourceGeneration: 'source-generation' });
   updates.push(transactionUpdates.at(-1).payload);
   assert.equal(updates[0].viewerUrl, null);
   assert.equal(updates[0].thumbnailUrl, null);
@@ -1179,20 +1184,21 @@ test('partial variant failure generation-deletes created objects and retains dis
   const viewerPath = 'group_tour_photos/tour-1/viewers/source_viewer.jpg';
   const thumbnailPath = 'group_tour_photos/tour-1/thumbnails/source_thumb.jpg';
   const deletes = [];
+  let viewerMetadata;
   const updates = [];
   const storageBucket = {
     file: (path) => {
       if (path === sourcePath) {
         return {
           download: async () => [Buffer.from('source')],
-          getMetadata: async () => [{ metadata: {} }],
+          getMetadata: async () => [{ generation: 'source-generation', metadata: {} }],
           setMetadata: async () => {},
         };
       }
       if (path === viewerPath) {
         return {
-          save: async () => {},
-          getMetadata: async () => [{ generation: 'viewer-generation-1' }],
+          save: async (_body, options) => { viewerMetadata = options.metadata.metadata; },
+          getMetadata: async () => [{ generation: 'viewer-generation-1', size: '17', metadata: viewerMetadata }],
           delete: async (options) => deletes.push({ path, options }),
         };
       }

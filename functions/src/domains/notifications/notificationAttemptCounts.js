@@ -24,7 +24,7 @@ const buildAttemptCountDeltaUpdates = (jobId, before, after) => {
   const updates = {};
   Object.keys(next).forEach((key) => {
     const delta = next[key] - previous[key];
-    if (delta) updates[`notification_jobs/${jobId}/counts/${key}`] = admin.database.ServerValue.increment(delta);
+    if (delta) updates[`notification_jobs_v2/${jobId}/counts/${key}`] = admin.database.ServerValue.increment(delta);
   });
   return updates;
 };

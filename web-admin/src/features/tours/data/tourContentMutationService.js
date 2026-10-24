@@ -1,6 +1,5 @@
 import {
   ref,
-  update,
   get,
   db,
 } from './tourServiceContext';
@@ -20,10 +19,11 @@ export const addPickupPoint = async (tourId, pickupPoint) => {
   const snapshot = await get(tourRef);
   const tour = snapshot.val();
 
-  const pickupPoints = tour.pickupPoints || [];
+  if (!tour) throw new Error('The tour no longer exists. Refresh before retrying.');
+  const pickupPoints = [...(tour.pickupPoints || [])];
   pickupPoints.push(pickupPoint);
 
-  await update(tourRef, { pickupPoints });
+  await updateTour(tourId, { pickupPoints }, { expectedRevision: tour.adminMutationRevision || null });
   return { tourId, pickupPoints };
 };
 

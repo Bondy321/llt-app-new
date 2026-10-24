@@ -1,9 +1,7 @@
 import {
   ref,
-  update,
   get,
   onValue,
-  runTransaction,
   db,
   postAdminAction,
   parseUKDateStrict,
@@ -14,7 +12,6 @@ import {
   generateTourId,
   hasOwn,
   trimTourCode,
-  buildTourCodeConflictMessage,
   assertTourCodeUnchanged,
   parseTourServiceDate,
   buildTourDateIndexFields,
@@ -36,6 +33,9 @@ const SERVER_OWNED_TOUR_FIELDS = new Set([
   'rosterSync',
   'itinerarySource',
   'manualPassengerCount',
+  'adminMutationRevision',
+  'startDateEpochMs',
+  'endDateEpochMs',
 ]);
 
 const stripServerOwnedAssignmentFields = (tourData = {}) => Object.fromEntries(
@@ -71,17 +71,21 @@ export const createTour = async (tourData, _createdBy = 'admin') => {
     }
   };
 
-  const tourRef = ref(db, `tours/${tourId}`);
-  const creation = await runTransaction(
-    tourRef,
-    (existingTour) => (existingTour === null ? newTour : undefined),
-    { applyLocally: false },
-  );
-  if (!creation.committed) {
-    throw new Error(buildTourCodeConflictMessage(tourCode, tourId));
-  }
+  const result = await postAdminAction('mutateTour', { tourId, mode: 'create', values: stripServerOwnedAssignmentFields(newTour) }, tourMutationOptions);
+  return { id: tourId, tour: result.tour };
+};
 
-  return { id: tourId, tour: newTour };
+const tourMutationOptions = {
+  configurationError: 'Safe tour editing is not configured for this admin deployment.',
+  fallbackError: 'The tour change was not confirmed. Refresh and try again.',
+  reasonMessages: {
+    TOUR_EXISTS: 'This tour code already exists. Use a different code.',
+    TOUR_NOT_FOUND: 'The tour no longer exists. Refresh the tour list.',
+    TOUR_CHANGED: 'This tour changed while you were editing it. Refresh before trying again.',
+    TOUR_BUSY_OR_DELETED: 'The tour is being imported or deleted. Refresh before trying again.',
+    TOUR_CAPACITY_EXCEEDED: 'Tour capacity cannot be lower than its booked passenger count.',
+    ADMIN_MFA_REQUIRED: 'Sign in with your authenticator to edit tours.',
+  },
 };
 
 /**
@@ -130,7 +134,7 @@ export const createTourFromTemplate = async (templateKey, overrides = {}, create
  * @param {string} tourId - Tour ID to update
  * @param {Object} updates - Fields to update
  */
-export const updateTour = async (tourId, updates) => {
+export const updateTour = async (tourId, updates, { expectedRevision } = {}) => {
   assertNoServerOwnedAssignmentFields(updates);
   const tourRef = ref(db, `tours/${tourId}`);
   const snapshot = await get(tourRef);
@@ -152,7 +156,8 @@ export const updateTour = async (tourId, updates) => {
     } : {}),
   };
 
-  await update(tourRef, indexedUpdates);
+  await postAdminAction('mutateTour', { tourId, mode: 'update', values: updates,
+    expectedRevision: expectedRevision === undefined ? existingTour.adminMutationRevision || null : expectedRevision }, tourMutationOptions);
 
   return { id: tourId, updates: indexedUpdates };
 };
@@ -174,6 +179,8 @@ export const deleteTour = async (tourId) => {
       NOT_AUTHORIZED: 'This account is not authorized to delete tours.',
       INVALID_TOUR: 'The tour ID is invalid.',
       DELETE_IN_PROGRESS: 'This tour is already being deleted. Wait a moment and retry.',
+      ROSTER_SYNC_IN_PROGRESS: 'This tour roster is being imported. Wait a moment and retry.',
+      STORAGE_CLEANUP_PENDING: 'Deletion is safely paused after a bounded batch. Retry Delete to continue removing this tour’s media.',
       INTERNAL_ERROR: 'The tour could not be deleted safely. Retry before making further changes.',
     },
   });

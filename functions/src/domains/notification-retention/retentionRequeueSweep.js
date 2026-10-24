@@ -65,7 +65,7 @@ const sweepDueRequeueRecovery = async ({
       recoveryDueAtMs: cursorRecord.recoveryDueAtMs,
       jobId: cursorRecord.jobId,
     } : null;
-  let query = db.ref('notification_requeue_jobs').orderByChild('recoveryDueAtMs');
+  let query = db.ref('notification_requeue_jobs_v2').orderByChild('recoveryDueAtMs');
   query = startCursor
     ? query.startAfter(startCursor.recoveryDueAtMs, startCursor.jobId)
     : query.startAt(1);
@@ -86,7 +86,7 @@ const sweepDueRequeueRecovery = async ({
     processed.push([jobId, state]);
     if (state?.status !== 'processing') {
       await transactionWithAuthoritativeExistingValue(
-        db.ref(`notification_requeue_jobs/${jobId}`), (current) => current?.requeueId === state?.requeueId
+        db.ref(`notification_requeue_jobs_v2/${jobId}`), (current) => current?.requeueId === state?.requeueId
           && Number(current?.recoveryDueAtMs) === Number(state?.recoveryDueAtMs)
           ? { ...current, recoveryDueAtMs: null } : undefined,
       );

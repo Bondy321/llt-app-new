@@ -4,10 +4,25 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { runInNewContext } = require('node:vm');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const source = (relativePath) => fs.readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
 const { sanitizeLogData } = require('../../functions/src/infrastructure/logging/safeLogger');
+
+const assertOrdinaryClientsDenied = (expression, label) => {
+  const absent = { child() { return this; }, val: () => null, exists: () => false,
+    hasChildren: () => false, hasChild: () => false };
+  const root = { ...absent, child: value => value.startsWith('admin_users/')
+    ? { ...absent, val: () => true, exists: () => true } : absent };
+  const identities = [null, ...['ordinary', 'listed-admin', '9CWQ4705gVRkfW5Xki5LyvrmVp23'].map(uid => ({ uid,
+    token: { admin: true, firebase: { sign_in_second_factor: 'totp' },
+      lltSessionIssuer: true, lltNotificationIssuer: true, lltMediaPublisher: true, lltTourPublisher: true } }))];
+  for (const auth of identities) {
+    assert.equal(runInNewContext(String(expression), { auth, root, data: absent, newData: absent, now: Date.now() }),
+      false, `${label}: ordinary clients cannot manufacture top-level server issuer authority`);
+  }
+};
 
 test('safe logger masks account, session, tour, driver, message and Storage identifiers', () => {
   const sanitized = sanitizeLogData({
@@ -73,13 +88,14 @@ test('durable workflow roots are server-private even to authenticated and admin 
     'account_deletion_uid_tombstones',
     'account_deletion_rollout',
   ].forEach((rootName) => {
-    assert.equal(rules[rootName]['.read'], false, `${rootName} read authority`);
-    assert.equal(rules[rootName]['.write'], false, `${rootName} write authority`);
+    assertOrdinaryClientsDenied(rules[rootName]['.read'], `${rootName} read authority`);
+    assertOrdinaryClientsDenied(rules[rootName]['.write'], `${rootName} write authority`);
   });
-  assert.match(rules.account_deletion_rollout.v1['.validate'], /compatibility/u);
+  assert.doesNotMatch(rules.account_deletion_rollout.v1['.validate'], /compatibility/u);
   assert.match(rules.account_deletion_rollout.v1['.validate'], /server_only/u);
   assert.match(rules.account_deletion_rollout.v1['.validate'], /hasChildren/u);
-  assert.equal(rules.account_deletion_rollout.v1.$other['.validate'], false);
+  assertOrdinaryClientsDenied(rules.account_deletion_rollout.v1.$other['.validate'], 'unknown rollout fields');
+  assertOrdinaryClientsDenied(rules['.write'], 'ancestor root write authority');
 });
 
 test('server workflow derives trusted scope, reserves atomically, and deletes Auth only in the terminal phase', () => {
@@ -87,10 +103,19 @@ test('server workflow derives trusted scope, reserves atomically, and deletes Au
   const workerSource = source('functions/src/domains/account-deletion/accountDeletionWorker.js');
   const finalizationSource = source('functions/src/domains/account-deletion/accountDeletionFinalization.js');
   const scopeSource = source('functions/src/domains/account-deletion/accountDeletionScope.js');
+  const authoritySource = source('functions/lib/sessionPublicationAuthority.js');
 
   assert.match(functionsSource, /deriveTrustedAccountDeletionScope/u);
   assert.match(functionsSource, /buildAppSessionCleanupUpdates/u);
-  assert.match(functionsSource, /await db\.ref\(\)\.update\(\{/u);
+  assert.match(functionsSource, /buildInitialAccountDeletionJob\(\{ deletionId, privateScope: scope\.privateScope/u);
+  assert.match(functionsSource, /prepareDeletionPublication\(\{ db, authUid, expectedSessionId, deletionId, job,\s*updates: reservationUpdates, lockOwner: sessionLock\.owner, capturedAuthority/u);
+  assert.match(functionsSource, /await commitDeletionPublication\(\{ db, authUid, authority, createIssuer \}\)/u);
+  assert.doesNotMatch(functionsSource, /await db\.ref\(\)\.update\(/u);
+  const deletionCommit = authoritySource.slice(authoritySource.indexOf('const commitDeletionPublication ='));
+  assert.match(deletionCommit, /job\.deletionId !== authority\.deletionId \|\| job\.privateScope\?\.authUid !== authUid/u);
+  assert.match(deletionCommit, /await issuer\.db\.ref\(\)\.update\(\{ \.\.\.JSON\.parse\(updatesJson\)/u);
+  assert.match(deletionCommit, /current\?\.epoch !== authority\.epoch \|\| current\.state !== 'deleted'/u);
+  assert.match(authoritySource, /databaseAuthVariableOverride: \{ uid: authUid, lltSessionIssuer: true/u);
   assert.match(functionsSource, /ACCOUNT_DELETION_JOB_ROOT/u);
   assert.match(functionsSource, /ACCOUNT_DELETION_QUEUE_ROOT/u);
   assert.match(functionsSource, /ACCOUNT_DELETION_ACTIVE_ROOT/u);

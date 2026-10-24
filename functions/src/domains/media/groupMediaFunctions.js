@@ -2,6 +2,11 @@
 
 // @ts-check
 
+const { createScopedMediaChatPublisher } = require('./mediaPublication');
+const { retireVariantObject, buildPhotoVariantPaths } = require('./mediaVariantStorage');
+const { performMediaUpload, assertMediaUploadSettled, mediaUploadFailureResponse } = require('./mediaUploadOperation');
+const { validateDecodedImage } = require('./mediaImageValidation');
+const { signCurrentMedia, isReadableMediaRecord, sameMediaAuthority } = require('./mediaOperationBoundary');
 const { onRequest } = require('firebase-functions/v2/https');
 const { createHash, randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
@@ -29,7 +34,6 @@ const {
   toRealtimeKeySegment,
 } = require('../../infrastructure/validation/stringNormalization');
 
-const PHOTO_CACHE_CONTROL_HEADER = 'private,max-age=300,no-transform';
 const MEDIA_RECORD_LOCK_TTL_MS = 5 * 60 * 1000;
 const onRequestWithResult = /** @type {any} */ (onRequest);
 
@@ -145,12 +149,15 @@ const deleteOwnedGroupPhotoRecordUnlocked = async ({
   const snapshot = await recordRef.once('value');
   if (!snapshot.exists()) return { deleted: false, alreadyDeleted: true, storageObjectsRemoved: 0 };
   const observed = snapshot.val() || {};
+  await assertMediaUploadSettled({ db, record: observed });
   if (!owners.has(observed.userId)) return { deleted: false, alreadyDeleted: false, reason: 'NOT_OWNER' };
+  const derived = typeof observed.storagePath === 'string'
+    ? buildPhotoVariantPaths({ visibility: 'group', tourId, ownerKey: null, filename: observed.storagePath.split('/').pop() }) : {};
   const captured = {
     userId: observed.userId,
     storagePath: observed.storagePath ?? null,
-    viewerStoragePath: observed.viewerStoragePath ?? null,
-    thumbnailStoragePath: observed.thumbnailStoragePath ?? null,
+    viewerStoragePath: observed.viewerStoragePath ?? derived.viewerPath ?? null,
+    thumbnailStoragePath: observed.thumbnailStoragePath ?? derived.thumbnailPath ?? null,
   };
   const capturedPaths = [captured.storagePath, captured.viewerStoragePath, captured.thumbnailStoragePath];
   if (capturedPaths.some((path) => path !== null && !isGroupMediaPathForRecord({ path, tourId }))) {
@@ -201,7 +208,9 @@ const deleteOwnedGroupPhotoRecordUnlocked = async ({
     if (assertCanDelete) await assertCanDelete();
     const field = ['storagePath', 'viewerStoragePath', 'thumbnailStoragePath']
       .find((candidate) => captured[candidate] === path);
-    await deleteStorageObjectIgnoringMissing(bucket, path, generations[field]);
+    if (field === 'storagePath') await deleteStorageObjectIgnoringMissing(bucket, path, generations[field]);
+    else await retireVariantObject({ bucket, path, expectedGeneration: generations[field], sourcePath: captured.storagePath,
+      sourceGeneration: generations.storagePath, sourceRole: field === 'viewerStoragePath' ? 'viewer' : 'thumbnail', visibility: 'group' });
   }
   if (assertCanDelete) await assertCanDelete();
   let matched = false;
@@ -265,7 +274,12 @@ const authorizeGroupMediaRequest = async ({ req, res, tourId, db = admin.databas
     res.status(401).json({ success: false, reason: 'APP_CHECK_REQUIRED' });
     return null;
   }
-  const access = await verifyCurrentTourPhotoAccess({ db, authUid: requestAuth.uid, tourId });
+  const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+  if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'group_media', maxRequests: 120, db }))) {
+    res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    return null;
+  }
+  const access = await verifyCurrentTourPhotoAccess({ db, authUid: requestAuth.uid, tourId, claims: requestAuth.claims });
   if (!access.allowed) {
     res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
     return null;
@@ -284,55 +298,20 @@ const resolveGroupPhotoMedia = onRequestWithResult(
     if (!authorization) return null;
     const records = await readGroupMediaRecords({ db: admin.database(), ...input });
     const expires = Date.now() + GROUP_MEDIA_URL_TTL_MS;
-    const media = await signGroupMediaRecords({ bucket: admin.storage().bucket(), input, records, expires });
-    return res.status(200).json({ success: true, expiresAtMs: expires, media });
+    const signed = await signCurrentMedia({ access: authorization.access, records,
+      readAccess: () => verifyCurrentTourPhotoAccess({ db: admin.database(), authUid: authorization.requestAuth.uid,
+        tourId: input.tourId, claims: authorization.requestAuth.claims }),
+      readRecords: () => readGroupMediaRecords({ db: admin.database(), ...input }),
+      sign: current => signGroupMediaRecords({ bucket: admin.storage().bucket(), input, records: current, expires }),
+    });
+    if (!signed.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    return res.status(200).json({ success: true, expiresAtMs: expires, media: signed.media });
   },
 );
 
-/** @type {(...args: any[]) => Promise<any>} */
-const reserveGroupPhotoRecord = async ({ db, input, access, contentType, fileSize, nowMs = Date.now() }) => {
-  const photoId = toRealtimeKeySegment(input.idempotencyKey);
-  const extension = extensionForGroupPhotoContentType(contentType);
-  const storagePath = `group_tour_photos/${input.tourId}/${photoId}.${extension}`;
-  const recordRef = db.ref(`group_tour_photos/${input.tourId}/${photoId}`);
-  let conflict = false;
-  let deduped = false;
-  const result = await recordRef.transaction(/** @param {any} current */ (current) => {
-    if (current) {
-      if (current._serverDeletion?.status === 'deleting') {
-        conflict = true;
-        return undefined;
-      }
-      if (current.idempotencyKey === input.idempotencyKey && current.userId === access.principalId
-        && current.storagePath === storagePath) {
-        deduped = true;
-        return current;
-      }
-      conflict = true;
-      return;
-    }
-    return {
-      userId: access.principalId,
-      caption: input.caption,
-      uploaderName: input.uploaderName,
-      timestamp: nowMs,
-      storagePath,
-      fileSize,
-      fileType: contentType,
-      idempotencyKey: input.idempotencyKey,
-      variantStatus: 'processing',
-      variantUpdatedAt: nowMs,
-      variantError: null,
-      variantVersion: 2,
-    };
-  });
-  if (conflict || !result.committed) return { success: false, reason: 'IDEMPOTENCY_CONFLICT' };
-  return { success: true, photoId, storagePath, deduped, recordRef };
-};
-
 /** @type {(...args: any[]) => any} */
 const uploadGroupPhoto = onRequestWithResult(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', cors: true },
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', concurrency: 2, cors: true },
   async (/** @type {any} */ req, /** @type {any} */ res) => {
     if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
     const input = normalizeGroupPhotoUploadMetadata(req.headers['x-group-photo-metadata']);
@@ -345,6 +324,8 @@ const uploadGroupPhoto = onRequestWithResult(
       || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
       return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
     }
+    try { await validateDecodedImage(body, contentType); }
+    catch { return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' }); }
     const db = admin.database();
     const photoId = toRealtimeKeySegment(input.idempotencyKey);
     const mutationLock = await acquireMediaRecordLock({
@@ -354,25 +335,10 @@ const uploadGroupPhoto = onRequestWithResult(
       return res.status(409).json({ success: false, reason: 'MEDIA_MUTATION_IN_PROGRESS' });
     }
     try {
-      const reservation = await reserveGroupPhotoRecord({
-        db,
-        input,
-        access: authorization.access,
-        contentType,
-        fileSize: body.length,
+      const reservation = await performMediaUpload({ db, bucket: admin.storage().bucket(), input,
+        access: authorization.access, authUid: authorization.requestAuth.uid, visibility: 'group', body, contentType,
+        lockOwner: mutationLock.owner, readAccess: () => verifyCurrentTourPhotoAccess({ db, authUid: authorization.requestAuth.uid, tourId: input.tourId, claims: authorization.requestAuth.claims }),
       });
-      if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
-      const file = admin.storage().bucket().file(reservation.storagePath);
-      if (!reservation.deduped || !(await file.exists())[0]) {
-        await file.save(body, {
-          resumable: false,
-          metadata: {
-            contentType,
-            cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-            metadata: { visibility: 'group', sourceRole: 'source' },
-          },
-        });
-      }
       return res.status(200).json({
         success: true,
         photo: {
@@ -384,6 +350,9 @@ const uploadGroupPhoto = onRequestWithResult(
           deduped: reservation.deduped,
         },
       });
+    } catch (error) {
+      const { status, reason } = mediaUploadFailureResponse(error);
+      return res.status(status).json({ success: false, reason });
     } finally {
       await releaseMediaRecordLock(mutationLock);
     }
@@ -475,25 +444,35 @@ const createGroupPhotoChatMessage = onRequestWithResult(
     const authorization = await authorizeGroupMediaRequest({ req, res, tourId });
     if (!authorization) return null;
     const photoSnapshot = await admin.database().ref(`group_tour_photos/${tourId}/${photoId}`).once('value');
-    if (!photoSnapshot.exists()) return res.status(404).json({ success: false, reason: 'PHOTO_NOT_FOUND' });
+    if (!photoSnapshot.exists() || !isReadableMediaRecord(photoSnapshot.val())) return res.status(404).json({ success: false, reason: 'PHOTO_NOT_FOUND' });
     const message = buildGroupPhotoChatMessageRecord({
       input: { caption, senderName, clientCreatedAt, messageId, photoId },
       principalId: authorization.access.principalId,
       role: authorization.access.role,
       serverTimestamp: admin.database.ServerValue.TIMESTAMP,
     });
-    const messageRef = admin.database().ref(`chats/${tourId}/messages/${messageId}`);
-    let conflict = false;
-    const transaction = await messageRef.transaction(/** @param {any} current */ (current) => {
-      if (!current) return message;
-      if (current.idempotencyKey === messageId && current.photoId === photoId
-        && current.senderId === authorization.access.principalId) return current;
-      conflict = true;
-      return;
-    });
-    if (conflict || !transaction.committed) {
-      return res.status(409).json({ success: false, reason: 'IDEMPOTENCY_CONFLICT' });
-    }
+    const publisher = await createScopedMediaChatPublisher({ db: admin.database(),
+      authUid: authorization.requestAuth.uid, access: authorization.access, claims: authorization.requestAuth.claims,
+      tourId, photoId, photo: photoSnapshot.val() });
+    let transaction;
+    try {
+      const messageRef = publisher.db.ref(`chats/${tourId}/messages/${messageId}`);
+      let conflict = false;
+      transaction = await messageRef.transaction(current => {
+        conflict = false;
+        if (!current) return message;
+        if (current.idempotencyKey === messageId && current.photoId === photoId
+          && current.senderId === authorization.access.principalId) return current;
+        conflict = true;
+        return undefined;
+      }, undefined, false);
+      if (conflict || !transaction.committed) {
+        return res.status(409).json({ success: false, reason: 'IDEMPOTENCY_CONFLICT' });
+      }
+    } finally { await publisher.close(); }
+    const currentAccess = await verifyCurrentTourPhotoAccess({ db: admin.database(),
+      authUid: authorization.requestAuth.uid, tourId, claims: authorization.requestAuth.claims });
+    if (!sameMediaAuthority(authorization.access, currentAccess)) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
     return res.status(200).json({
       success: true,
       message: buildGroupPhotoChatResponseMessage(transaction.snapshot.val(), messageId),
@@ -513,7 +492,6 @@ module.exports = {
   normalizeGroupPhotoUploadMetadata,
   mediaRecordFingerprint,
   readStorageObjectGeneration,
-  reserveGroupPhotoRecord,
   releaseMediaRecordLock,
   resolveGroupPhotoMedia,
   uploadGroupPhoto,

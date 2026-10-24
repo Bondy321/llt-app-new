@@ -1,3 +1,4 @@
+const { boundedNetworkDecision } = require('../boundedNetworkDecision');
 const {
   DEFAULT_LIVE_MESSAGE_LIMIT,
   DEFAULT_PAGE_MESSAGE_LIMIT,
@@ -19,6 +20,7 @@ const {
   buildTimestampQuery,
   getChatMessagesPath,
   hydrateGroupPhotoMessages,
+  photoPlaceholders,
   normalizeChatScope,
   readMessagesFromSnapshot,
 } = require('./chatMessageModel');
@@ -70,7 +72,11 @@ const subscribeToChatMessages = (tourId, onMessagesUpdate, dbInstance, options =
         onMessagesUpdate(messages);
         return;
       }
-      hydrateGroupPhotoMessages(validatedTourId, messages, options.resolveGroupPhotoMediaFn)
+      onMessagesUpdate(photoPlaceholders(messages));
+      hydrateGroupPhotoMessages(validatedTourId, messages, options.resolveGroupPhotoMediaFn, {
+        timeoutMs: options.mediaTimeoutMs,
+        isCurrent: () => currentGeneration === generation,
+      })
         .then((hydrated) => {
           if (currentGeneration === generation) onMessagesUpdate(hydrated);
         })
@@ -304,6 +310,9 @@ const getChatMessageById = async ({
   messageId,
   scope = 'group',
   dbInstance,
+  resolveGroupPhotoMediaFn,
+  isCurrent = () => true,
+  mediaTimeoutMs,
 } = {}) => {
   try {
     const db = dbInstance || resolveRealtimeDb();
@@ -311,7 +320,7 @@ const getChatMessageById = async ({
 
     const safeMessageId = validateMessageId(messageId);
     const messagePath = `${getChatMessagesPath(tourId, scope)}/${safeMessageId}`;
-    const snapshot = await db.ref(messagePath).once('value');
+    const snapshot = await boundedNetworkDecision(() => db.ref(messagePath).once('value'), mediaTimeoutMs || 8000);
     if (!snapshot?.exists?.()) {
       return { success: true, message: null };
     }
@@ -321,9 +330,22 @@ const getChatMessageById = async ({
       return { success: true, message: null };
     }
 
+    let normalized = normalizeMessageTimestamp({ id: safeMessageId, ...raw });
+    let [message] = normalizeChatScope(scope) === 'group'
+      ? await hydrateGroupPhotoMessages(tourId, [normalized], resolveGroupPhotoMediaFn, { isCurrent, timeoutMs: mediaTimeoutMs })
+      : [normalized];
+    if (!isCurrent()) return { success: false, message: null, error: 'Message scope changed' };
+    if (normalized.type === 'image' && normalized.photoId) {
+      const current = await boundedNetworkDecision(() => db.ref(messagePath).once('value'), mediaTimeoutMs || 8000);
+      if (!isCurrent()) return { success: false, message: null, error: 'Message scope changed' };
+      if (!current?.exists?.()) return { success: true, message: null };
+      const latest = normalizeMessageTimestamp({ id: safeMessageId, ...current.val() });
+      if (latest.deleted || latest.isDeleted || latest.photoId !== normalized.photoId) message = photoPlaceholders([latest], 'retryable')[0];
+      else message = { ...latest, imageUrl: message.imageUrl, thumbnailUrl: message.thumbnailUrl, mediaState: message.mediaState };
+    }
     return {
       success: true,
-      message: normalizeMessageTimestamp({ id: safeMessageId, ...raw }),
+      message,
     };
   } catch (error) {
     logChatEvent('warn', 'chat_message_target_fetch_failed', {

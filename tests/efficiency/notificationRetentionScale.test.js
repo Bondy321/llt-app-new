@@ -110,36 +110,36 @@ const terminalAttempt = (jobId, index, { queued = false } = {}) => ({
 });
 
 const seedScheduledJob = async (db, job) => {
-  db.data.notification_jobs ||= {};
-  db.data.notification_jobs[job.jobId] = JSON.parse(JSON.stringify(job));
+  db.data.notification_jobs_v2 ||= {};
+  db.data.notification_jobs_v2[job.jobId] = JSON.parse(JSON.stringify(job));
   const scheduled = await ensureNotificationRetentionScheduled({ db, jobId: job.jobId, job, nowMs: NOW_MS });
   assert.equal(scheduled.reason, 'scheduled');
 };
 
 const buildScaleDb = async ({ unrelated = 0 } = {}) => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_delivery_attempts: {},
-    notification_attempt_retry_queue: {},
-    notification_jobs: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_delivery_attempts_v2: {},
+    notification_attempt_retry_queue_v2: {},
+    notification_jobs_v2: {},
   });
   await seedScheduledJob(db, canonicalJob(JOB_ID));
   for (let index = 0; index < 50_000; index += 1) {
     const attempt = terminalAttempt(JOB_ID, index, { queued: true });
-    db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
-    db.data.notification_attempt_retry_queue[attempt.queueKey] = {
+    db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
+    db.data.notification_attempt_retry_queue_v2[attempt.queueKey] = {
       targetId: attempt.attemptId, version: 1, dueAtMs: NOW_MS,
     };
   }
   for (let index = 0; index < unrelated; index += 1) {
     const attemptId = `zz_unrelated_${String(index).padStart(7, '0')}`;
     const otherJobId = `other_${String(index).padStart(7, '0')}`;
-    db.data.notification_delivery_attempts[attemptId] = {
+    db.data.notification_delivery_attempts_v2[attemptId] = {
       schemaVersion: 2, attemptId, jobId: otherJobId,
       status: 'provider_accepted', retentionDueAtMs: NOW_MS,
     };
-    db.data.notification_jobs[otherJobId] = { jobId: otherJobId, status: 'provider_accepted' };
+    db.data.notification_jobs_v2[otherJobId] = { jobId: otherJobId, status: 'provider_accepted' };
   }
   return db;
 };
@@ -163,15 +163,15 @@ test('default budgets enforce the reviewed page, fairness, global and memory cei
 test('hasMore distinguishes an exactly full final page from one remaining record', async () => {
   const build = async (attemptCount) => {
     const db = createNotificationRetentionMemoryDb({
-      notification_retention_rollout: { v1: rollout() },
-      notification_retention: { v1: { evidence: retentionEvidence() } },
-      notification_jobs: {},
-      notification_delivery_attempts: {},
+      notification_retention_rollout: { v2: rollout() },
+      notification_retention: { v2: { evidence: retentionEvidence() } },
+      notification_jobs_v2: {},
+      notification_delivery_attempts_v2: {},
     });
     await seedScheduledJob(db, canonicalJob(JOB_ID));
     for (let index = 0; index < attemptCount; index += 1) {
       const attempt = terminalAttempt(JOB_ID, index);
-      db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
+      db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
     }
     return db;
   };
@@ -182,7 +182,7 @@ test('hasMore distinguishes an exactly full final page from one remaining record
   assert.equal(exact.metrics.attemptPagesQueried, 4);
   assert.equal(exact.metrics.attemptsDeleted, 1_000);
   assert.equal(exact.hasMore, false);
-  assert.equal(exactDb.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(exactDb.getAtPath(`notification_jobs_v2/${JOB_ID}`), undefined);
 
   const lookaheadDb = await build(1_001);
   const lookahead = await runNotificationRetentionCycle({
@@ -191,7 +191,7 @@ test('hasMore distinguishes an exactly full final page from one remaining record
   assert.equal(lookahead.metrics.attemptPagesQueried, 4);
   assert.equal(lookahead.metrics.attemptsDeleted, 1_000);
   assert.equal(lookahead.hasMore, true);
-  assert.equal(Object.keys(lookaheadDb.data.notification_delivery_attempts).length, 1);
+  assert.equal(Object.keys(lookaheadDb.data.notification_delivery_attempts_v2).length, 1);
 });
 
 test('engine processes exactly four bounded pages from a 50,000-attempt campaign', async () => {
@@ -207,7 +207,7 @@ test('engine processes exactly four bounded pages from a 50,000-attempt campaign
   assert.equal(result.metrics.maxUpdatePaths, 500);
   assert.ok(result.metrics.maxRecordsInMemory <= 251);
   assert.equal(result.hasMore, true);
-  assert.equal(Object.keys(db.data.notification_delivery_attempts).length, 49_000);
+  assert.equal(Object.keys(db.data.notification_delivery_attempts_v2).length, 49_000);
   assert.equal(Math.ceil(50_000 / 250), 200);
   assert.equal(Math.ceil(50_000 / 1_000), 50);
   assert.equal(Math.ceil(50_000 / 100), 500, 'legacy cleanup requires 500 daily runs');
@@ -225,7 +225,7 @@ test('100,000 unrelated attempts do not change selected engine pages, budgets or
   ]) {
     assert.equal(withUnrelated.metrics[metric], baseline.metrics[metric], metric);
   }
-  assert.equal(Object.keys(unrelatedDb.data.notification_delivery_attempts)
+  assert.equal(Object.keys(unrelatedDb.data.notification_delivery_attempts_v2)
     .filter((key) => key.startsWith('zz_unrelated_')).length, 100_000);
 });
 
@@ -234,33 +234,33 @@ test('round-robin engine completes a small job, progresses a large job and defer
   const smallId = 'notif_v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
   const blockedId = 'notif_v1_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
-    notification_requeue_jobs: {
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
+    notification_requeue_jobs_v2: {
       [blockedId]: { status: 'processing', expiresAtMs: NOW_MS + 60_000 },
     },
   });
   for (const jobId of [largeId, smallId, blockedId]) await seedScheduledJob(db, canonicalJob(jobId));
   for (let index = 0; index < 2_000; index += 1) {
     const attempt = terminalAttempt(largeId, index);
-    db.data.notification_delivery_attempts[`large_${attempt.attemptId}`] = { ...attempt, attemptId: `large_${attempt.attemptId}` };
+    db.data.notification_delivery_attempts_v2[`large_${attempt.attemptId}`] = { ...attempt, attemptId: `large_${attempt.attemptId}` };
   }
   for (let index = 0; index < 10; index += 1) {
     const attempt = terminalAttempt(smallId, index);
-    db.data.notification_delivery_attempts[`small_${attempt.attemptId}`] = { ...attempt, attemptId: `small_${attempt.attemptId}` };
+    db.data.notification_delivery_attempts_v2[`small_${attempt.attemptId}`] = { ...attempt, attemptId: `small_${attempt.attemptId}` };
   }
   for (let index = 0; index < 100; index += 1) {
     const attempt = terminalAttempt(blockedId, index);
-    db.data.notification_delivery_attempts[`blocked_${attempt.attemptId}`] = { ...attempt, attemptId: `blocked_${attempt.attemptId}` };
+    db.data.notification_delivery_attempts_v2[`blocked_${attempt.attemptId}`] = { ...attempt, attemptId: `blocked_${attempt.attemptId}` };
   }
   const result = await runNotificationRetentionCycle({
     db, nowMs: NOW_MS, ownerId: 'fairness-worker', budgets: { orphanPageSize: 250 },
   });
-  assert.equal(db.getAtPath(`notification_jobs/${smallId}`), undefined, 'small job completes');
-  assert.equal(Object.values(db.data.notification_delivery_attempts).filter((attempt) => attempt.jobId === largeId).length, 1_000);
-  assert.equal(Object.values(db.data.notification_delivery_attempts).filter((attempt) => attempt.jobId === blockedId).length, 100);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${smallId}`), undefined, 'small job completes');
+  assert.equal(Object.values(db.data.notification_delivery_attempts_v2).filter((attempt) => attempt.jobId === largeId).length, 1_000);
+  assert.equal(Object.values(db.data.notification_delivery_attempts_v2).filter((attempt) => attempt.jobId === blockedId).length, 100);
   assert.equal(result.metrics.jobsDeferred, 1);
   assert.equal(result.metrics.jobsCompleted, 1);
   assert.equal(result.metrics.attemptsDeleted, 1_010);
@@ -270,15 +270,15 @@ test('round-robin engine completes a small job, progresses a large job and defer
 
 test('concurrent engine workers respect one retention lease and never double delete', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   });
   await seedScheduledJob(db, canonicalJob(JOB_ID));
   for (let index = 0; index < 300; index += 1) {
     const attempt = terminalAttempt(JOB_ID, index);
-    db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
+    db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
   }
   const [left, right] = await Promise.all([
     runNotificationRetentionCycle({ db, nowMs: NOW_MS, ownerId: 'worker-left', budgets: { orphanPageSize: 250 } }),
@@ -286,25 +286,25 @@ test('concurrent engine workers respect one retention lease and never double del
   ]);
   assert.equal(left.metrics.jobsClaimed + right.metrics.jobsClaimed, 1);
   assert.equal(left.metrics.attemptsDeleted + right.metrics.attemptsDeleted, 300);
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
-  assert.equal(Object.keys(db.data.notification_delivery_attempts || {}).length, 0);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${JOB_ID}`), undefined);
+  assert.equal(Object.keys(db.data.notification_delivery_attempts_v2 || {}).length, 0);
 });
 
-test('a page commit lease prevents takeover while the bounded destructive unit is live', async () => {
+test('a page commit lease prevents takeover while the bounded destructive unit is live', { timeout: 10_000 }, async () => {
   let releaseFirstUpdate;
   let reportFirstUpdate;
   let firstUpdateBlocked = false;
   const firstUpdateEntered = new Promise((resolve) => { reportFirstUpdate = resolve; });
   const firstUpdateGate = new Promise((resolve) => { releaseFirstUpdate = resolve; });
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   }, {
     beforeUpdate: async ({ patch }) => {
       const deletesAttempts = Object.keys(patch || {})
-        .some((entry) => entry.startsWith('notification_delivery_attempts/'));
+        .some((entry) => entry.startsWith('notification_delivery_attempts_v2/'));
       if (!deletesAttempts || firstUpdateBlocked) return;
       firstUpdateBlocked = true;
       reportFirstUpdate();
@@ -314,62 +314,66 @@ test('a page commit lease prevents takeover while the bounded destructive unit i
   await seedScheduledJob(db, canonicalJob(JOB_ID));
   for (let index = 0; index < 300; index += 1) {
     const attempt = terminalAttempt(JOB_ID, index);
-    db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
+    db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
   }
   const staleWorker = runNotificationRetentionCycle({
     db, nowMs: NOW_MS, ownerId: 'stale-worker', budgets: { orphanPageSize: 250 },
   });
-  await firstUpdateEntered;
-  const takeover = await runNotificationRetentionCycle({
-    db,
-    nowMs: NOW_MS + DEFAULT_RETENTION_BUDGETS.leaseMs + 1,
-    ownerId: 'takeover-worker',
-    budgets: { orphanPageSize: 250 },
-  });
-  releaseFirstUpdate();
+  await Promise.race([firstUpdateEntered, staleWorker.then(result => {
+    throw new Error(`Retention worker finished before the destructive boundary: ${JSON.stringify(result)}`);
+  })]);
+  let takeover;
+  try {
+    takeover = await runNotificationRetentionCycle({
+      db,
+      nowMs: NOW_MS + DEFAULT_RETENTION_BUDGETS.leaseMs + 1,
+      ownerId: 'takeover-worker',
+      budgets: { orphanPageSize: 250 },
+    });
+  } finally { releaseFirstUpdate(); }
   const stale = await staleWorker;
   assert.equal(takeover.metrics.jobsCompleted, 0);
   assert.equal(takeover.metrics.attemptsDeleted, 0);
   assert.equal(stale.metrics.jobsCompleted, 1);
   assert.equal(stale.metrics.attemptsDeleted, 300);
-  assert.equal(db.getAtPath(`notification_jobs/${JOB_ID}`), undefined);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${JOB_ID}`), undefined);
 });
 
 test('legacy and shadow modes perform no compactor deletion', async () => {
   for (const phase of ['legacy', 'shadow']) {
     const db = createNotificationRetentionMemoryDb({
-      notification_retention_rollout: { v1: rollout(phase) },
-      notification_retention: { v1: { evidence: retentionEvidence() } },
-      notification_jobs: {},
-      notification_delivery_attempts: {},
+      notification_retention_rollout: { v2: rollout(phase) },
+      notification_retention: { v2: { evidence: retentionEvidence() } },
+      notification_jobs_v2: {},
+      notification_delivery_attempts_v2: {},
     });
     await seedScheduledJob(db, canonicalJob(JOB_ID));
-    db.data.notification_delivery_attempts.attempt_1 = terminalAttempt(JOB_ID, 1);
+    db.data.notification_delivery_attempts_v2.attempt_1 = terminalAttempt(JOB_ID, 1);
     const result = await runNotificationRetentionCycle({
       db, nowMs: NOW_MS, ownerId: `${phase}-worker`, legacyCleanup: async () => ({ deleted: 0 }),
     });
     assert.equal(result.mode, phase);
     assert.equal(result.metrics.attemptsDeleted, 0);
-    assert.ok(db.getAtPath(`notification_jobs/${JOB_ID}`));
-    assert.ok(db.getAtPath('notification_delivery_attempts/attempt_1'));
+    assert.ok(db.getAtPath(`notification_jobs_v2/${JOB_ID}`));
+    assert.ok(db.getAtPath('notification_delivery_attempts_v2/attempt_1'));
     if (phase === 'shadow') {
-      assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/status'), 'passed');
-      assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/shadowMismatches'), 0);
+      assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/status'), 'passed');
+      assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/shadowMismatches'), 0);
     }
   }
 });
 
 test('global attempt budget is exact even when the final page is partial', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   });
   await seedScheduledJob(db, canonicalJob(JOB_ID));
   for (let index = 0; index < 300; index += 1) {
     const attempt = terminalAttempt(JOB_ID, index);
-    db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
+    db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
   }
   const result = await runNotificationRetentionCycle({
     db,
@@ -386,33 +390,33 @@ test('global attempt budget is exact even when the final page is partial', async
   });
   assert.equal(result.metrics.attemptsDeleted, 275);
   assert.equal(result.metrics.attemptPagesQueried, 2);
-  assert.equal(Object.keys(db.data.notification_delivery_attempts).length, 25);
+  assert.equal(Object.keys(db.data.notification_delivery_attempts_v2).length, 25);
   assert.equal(result.hasMore, true);
 });
 
 test('durable scheduler rotation reaches a small job beyond the current discovery page', async () => {
   const ids = ['b', 'c', 'd'].map((character) => `notif_v1_${character.repeat(64)}`);
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   });
   for (const id of ids) await seedScheduledJob(db, canonicalJob(id));
-  const queue = Object.entries(db.getAtPath('notification_retention/v1/queue'))
+  const queue = Object.entries(db.getAtPath('notification_retention/v2/queue'))
     .sort(([left], [right]) => left.localeCompare(right));
   const orderedIds = queue.map(([, entry]) => entry.jobId);
   for (const id of orderedIds.slice(0, 2)) {
     for (let index = 0; index < 3; index += 1) {
       const attempt = terminalAttempt(id, index);
       attempt.attemptId = `${id.slice(-4)}_${index}`;
-      db.data.notification_delivery_attempts[attempt.attemptId] = attempt;
+      db.data.notification_delivery_attempts_v2[attempt.attemptId] = attempt;
     }
   }
   const smallId = orderedIds[2];
   const smallAttempt = terminalAttempt(smallId, 1);
   smallAttempt.attemptId = 'small_attempt';
-  db.data.notification_delivery_attempts.small_attempt = smallAttempt;
+  db.data.notification_delivery_attempts_v2.small_attempt = smallAttempt;
   const budgets = {
     maxJobs: 2,
     pageSize: 1,
@@ -428,20 +432,20 @@ test('durable scheduler rotation reaches a small job beyond the current discover
     db, nowMs: NOW_MS, ownerId: 'rotation-first', budgets,
   });
   assert.equal(first.metrics.attemptsDeleted, 2);
-  assert.ok(db.getAtPath(`notification_jobs/${smallId}`));
+  assert.ok(db.getAtPath(`notification_jobs_v2/${smallId}`));
   const second = await runNotificationRetentionCycle({
     db, nowMs: NOW_MS, ownerId: 'rotation-second', budgets,
   });
   assert.equal(second.metrics.jobsCompleted, 1);
-  assert.equal(db.getAtPath(`notification_jobs/${smallId}`), undefined);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${smallId}`), undefined);
 });
 
 test('a 500-job due backlog preserves the 25-job discovery and 20-page ceilings', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   });
   for (let index = 0; index < 500; index += 1) {
     const id = `notif_v1_${index.toString(16).padStart(64, '0')}`;
@@ -456,8 +460,8 @@ test('a 500-job due backlog preserves the 25-job discovery and 20-page ceilings'
   assert.equal(result.metrics.jobsDiscovered, 25);
   assert.equal(result.metrics.jobsCompleted, 20);
   assert.equal(result.metrics.attemptPagesQueried, 20);
-  assert.equal(Object.keys(db.getAtPath('notification_jobs') || {}).length, 480);
-  assert.equal(Object.keys(db.getAtPath('notification_retention/v1/queue') || {}).length, 480);
+  assert.equal(Object.keys(db.getAtPath('notification_jobs_v2') || {}).length, 480);
+  assert.equal(Object.keys(db.getAtPath('notification_retention/v2/queue') || {}).length, 480);
   assert.ok(result.metrics.maxRecordsInMemory <= 251);
   assert.ok(result.metrics.maxUpdatePaths <= 5);
   assert.equal(result.hasMore, true);
@@ -465,9 +469,9 @@ test('a 500-job due backlog preserves the 25-job discovery and 20-page ceilings'
 
 test('shadow evidence resumes durably beyond 500 jobs without retaining identity sets', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout('shadow') },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout('shadow') },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   }, { nullFirstTransactions: true });
   for (let index = 0; index < 501; index += 1) {
     const id = `notif_v1_${index.toString(16).padStart(64, '0')}`;
@@ -484,10 +488,10 @@ test('shadow evidence resumes durably beyond 500 jobs without retaining identity
   const result = await runShadow();
   assert.equal(result.hasMore, true);
   assert.equal(result.metrics.shadowMismatches, 0);
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/status'), 'incomplete');
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/hasMore'), true);
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/compactorScanned'), 500);
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/legacyScanned'), 0);
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/status'), 'incomplete');
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/hasMore'), true);
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/compactorScanned'), 500);
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/legacyScanned'), 0);
   assert.equal(legacyRuns, 0, 'legacy mutation waits for the complete pre-mutation comparison');
   let resumed = result;
   for (let invocation = 0; invocation < 4 && resumed.hasMore; invocation += 1) {
@@ -496,18 +500,18 @@ test('shadow evidence resumes durably beyond 500 jobs without retaining identity
   assert.equal(resumed.hasMore, false);
   assert.equal(resumed.metrics.shadowEligible, 501);
   assert.equal(resumed.metrics.shadowLegacyEligible, 501);
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/status'), 'passed');
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/compactorScanned'), 501);
-  assert.equal(db.getAtPath('notification_retention/v1/evidence/shadow/legacyScanned'), 501);
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/status'), 'passed');
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/compactorScanned'), 501);
+  assert.equal(db.getAtPath('notification_retention/v2/evidence/shadow/legacyScanned'), 501);
   assert.equal(legacyRuns, 0, 'shadow never invokes retired legacy mutation');
   assert.ok(resumed.metrics.maxRecordsInMemory <= 26);
 });
 
 test('concurrent shadow workers adopt newer durable progress without poisoning evidence', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout('shadow') },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
+    notification_retention_rollout: { v2: rollout('shadow') },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
   });
   for (let index = 0; index < 20; index += 1) {
     const id = `notif_v1_${index.toString(16).padStart(64, '0')}`;
@@ -523,7 +527,7 @@ test('concurrent shadow workers adopt newer durable progress without poisoning e
     runShadow('concurrent-shadow-b', NOW_MS + 1),
   ]);
   assert.ok(results.every((result) => result.metrics.shadowMismatches === 0));
-  const evidence = db.getAtPath('notification_retention/v1/evidence/shadow');
+  const evidence = db.getAtPath('notification_retention/v2/evidence/shadow');
   assert.notEqual(evidence.status, 'failed');
   assert.ok(evidence.progressRevision >= 1);
   assert.equal(evidence.conflict, undefined);
@@ -531,11 +535,11 @@ test('concurrent shadow workers adopt newer durable progress without poisoning e
 
 test('the internal deadline covers auxiliary sweeps and leaves later work untouched', async () => {
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout() },
-    notification_retention: { v1: { evidence: retentionEvidence() } },
-    notification_jobs: {},
-    notification_delivery_attempts: {},
-    notification_audience_previews: {
+    notification_retention_rollout: { v2: rollout() },
+    notification_retention: { v2: { evidence: retentionEvidence() } },
+    notification_jobs_v2: {},
+    notification_delivery_attempts_v2: {},
+    notification_audience_previews_v2: {
       expired_preview: { expiresAtMs: NOW_MS },
     },
   });
@@ -549,5 +553,5 @@ test('the internal deadline covers auxiliary sweeps and leaves later work untouc
   });
   assert.equal(result.budgetExhaustionReason, 'internal_deadline');
   assert.equal(result.metrics.previewsDeleted, 0);
-  assert.ok(db.getAtPath('notification_audience_previews/expired_preview'));
+  assert.ok(db.getAtPath('notification_audience_previews_v2/expired_preview'));
 });

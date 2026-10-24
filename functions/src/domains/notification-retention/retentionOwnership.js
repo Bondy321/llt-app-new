@@ -42,7 +42,7 @@ const cumulativeFenceFields = (state, nowMs) => (
 );
 
 const readActiveRequeue = async (db, jobId, nowMs, metrics) => {
-  const value = (await db.ref(`notification_requeue_jobs/${jobId}`).once('value')).val();
+  const value = (await db.ref(`notification_requeue_jobs_v2/${jobId}`).once('value')).val();
   metrics.queries += 1;
   return Boolean(value && value.status === 'processing');
 };
@@ -97,7 +97,7 @@ const cancelCanonicalFence = async ({
 }) => {
   let cancelled = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (current) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (current) => {
     if (!current || current.retentionFence?.fenceId !== fenceId) return undefined;
     if (current.retentionFence.irreversibleWorkStarted === true
       || (current.retentionFence.commitStatus === 'destructive'

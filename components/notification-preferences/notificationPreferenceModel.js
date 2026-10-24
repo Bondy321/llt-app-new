@@ -61,3 +61,34 @@ export const MARKETING_PREFERENCE_META = TOUR_NOTIFICATION_CATEGORIES.reduce((me
     };
     return meta;
   }, {});
+
+export const ONBOARDING_COPY = {
+    passenger: {
+      title: 'Stay in the loop on your tour',
+      subtitle: 'Turn on notifications so you get pickup timing changes, driver announcements, and group updates without opening the app.',
+      icon: 'bus-clock',
+      cardTitle: 'Recommended for passengers',
+      cardBody: 'We will use notifications only for the updates you choose below. You can change everything later in Settings.',
+      primaryCta: 'Enable notifications',
+      secondaryCta: 'Maybe later',
+    },
+    driver: {
+      title: 'Enable critical driver alerts',
+      subtitle: 'Driver notifications are essential for itinerary changes, operational updates, and urgent HQ messages while on the road.',
+      icon: 'steering',
+      cardTitle: 'Recommended for drivers',
+      cardBody: 'To keep operations smooth, keep Driver Announcements and Itinerary Updates switched on.',
+      primaryCta: 'Enable driver alerts',
+      secondaryCta: 'Skip for now',
+    },
+  };
+
+
+export const PERMISSION_TONE_BY_STATE = {
+    granted: { label: 'Enabled', color: COLORS.successGreen, icon: 'check-circle-outline' },
+    provisional: { label: 'Enabled quietly', color: COLORS.primaryBlue, icon: 'bell-outline' },
+    ephemeral: { label: 'Enabled temporarily', color: COLORS.warning, icon: 'clock-outline' },
+    denied: { label: 'Not enabled yet', color: COLORS.warning, icon: 'alert-outline' },
+    blocked: { label: 'Blocked in device settings', color: COLORS.danger, icon: 'alert-circle-outline' },
+    unavailable: { label: 'Unavailable on this device', color: COLORS.secondaryText, icon: 'cellphone-off' },
+  };

@@ -50,7 +50,7 @@ const readEffectiveAttention = async (db, jobId, state = null) => {
 };
 
 const isManualRequeueBlockedByRetentionState = async ({ db, jobId, job = null }) => {
-  const canonical = job || (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const canonical = job || (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   const state = await readRetentionState(db, jobId);
   if (stateTargetsCanonical(state, jobId, canonical)
     && retentionStateBlocksManualRequeue(state)) return true;
@@ -180,7 +180,7 @@ const abandonNotificationRetentionAttention = async ({
     || hasCommittedIrreversibleWork(state)) {
     return { abandoned: false, reason: 'irreversible_work_started' };
   }
-  const canonical = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const canonical = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   const expectedFenceId = fenceIdFor(jobId, state.generation);
   if (canonical?.retentionFence) {
     if (canonical.retentionFence.fenceId !== expectedFenceId) {
@@ -245,9 +245,9 @@ const exactRestoredRecoveryJob = ({
 
 const recoverZeroResultRequeue = async ({ db, jobId, state, nowMs }) => {
   if (state?.status !== 'complete' || Number(state.requeued || 0) !== 0) {
-    return (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+    return (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   }
-  const jobRef = db.ref(`notification_jobs/${jobId}`);
+  const jobRef = db.ref(`notification_jobs_v2/${jobId}`);
   const observed = (await jobRef.once('value')).val();
   if (!observed || observed.status !== 'retrying') return observed;
 
@@ -306,7 +306,7 @@ const exactRequeueIdentity = (current, expected) => current
 const preserveExpiredState = async ({ db, jobId, expected, nowMs, malformed = false }) => {
   let preserved = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_requeue_jobs/${jobId}`), (current) => {
+    db.ref(`notification_requeue_jobs_v2/${jobId}`), (current) => {
     if (!exactRequeueIdentity(current, expected)) return undefined;
     preserved = true;
     const liveLease = !malformed && current.lease
@@ -341,7 +341,7 @@ const cleanupExpiredNotificationRequeueState = async ({
   }
   let deleted = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_requeue_jobs/${jobId}`), (current) => {
+    db.ref(`notification_requeue_jobs_v2/${jobId}`), (current) => {
     if (!exactRequeueIdentity(current, expected)) return undefined;
     deleted = true;
     return null;

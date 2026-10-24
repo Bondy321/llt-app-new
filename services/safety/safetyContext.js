@@ -1,5 +1,5 @@
 // services/safetyService.js - Enhanced Safety & Emergency Services
-import { auth, realtimeDb } from '../../firebase';
+import { auth, realtimeDb, getCurrentAppCheckToken } from '../../firebase';
 import logger from '../loggerService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseTimestampMs } from '../timeUtils';
@@ -337,11 +337,19 @@ const buildSafetySubmissionEndpoint = () => {
     : null;
 };
 
-const fetchSafetySubmission = async (endpoint, options) => {
+const withSafetySubmissionDeadline = async (operation) => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SAFETY_SUBMISSION_TIMEOUT_MS);
+  let timeout;
   try {
-    return await fetch(endpoint, { ...options, signal: controller.signal });
+    return await Promise.race([
+      operation(controller.signal),
+      new Promise((_, reject) => { timeout = setTimeout(() => {
+        controller.abort();
+        reject(Object.assign(new Error('Safety submission timed out; acceptance is unconfirmed'), {
+          code: 'SAFETY_SUBMISSION_TIMEOUT', retryable: true,
+        }));
+      }, SAFETY_SUBMISSION_TIMEOUT_MS); }),
+    ]);
   } finally {
     clearTimeout(timeout);
   }
@@ -367,7 +375,7 @@ const toRemoteSafetyPayload = (payload, { processedFromQueue = false } = {}) => 
   };
 };
 
-const writeSafetyEventAtomically = async (payload, options = {}) => {
+const writeSafetyEventAtomically = async (payload, options = {}) => withSafetySubmissionDeadline(async signal => {
   const currentUser = auth?.currentUser;
   if (!currentUser || typeof currentUser.getIdToken !== 'function') {
     const error = new Error('Authenticated safety identity is still starting');
@@ -384,6 +392,9 @@ const writeSafetyEventAtomically = async (payload, options = {}) => {
   }
 
   const token = await currentUser.getIdToken();
+  const appCheck = await getCurrentAppCheckToken();
+  if (signal.aborted) throw Object.assign(new Error('Safety submission timed out'), { code: 'SAFETY_SUBMISSION_TIMEOUT', retryable: true });
+  if (auth.currentUser !== currentUser) throw Object.assign(new Error('Safety account changed'), { code: 'SAFETY_AUTH_REQUIRED', retryable: true });
   if (typeof token !== 'string' || !token.trim()) {
     const error = new Error('Authenticated safety identity is not ready');
     error.code = 'SAFETY_AUTH_REQUIRED';
@@ -391,11 +402,13 @@ const writeSafetyEventAtomically = async (payload, options = {}) => {
     throw error;
   }
   const requestPayload = toRemoteSafetyPayload(payload, options);
-  const response = await fetchSafetySubmission(endpoint, {
+  const response = await fetch(endpoint, {
+    signal,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}),
     },
     body: JSON.stringify({
       ...requestPayload,
@@ -423,7 +436,7 @@ const writeSafetyEventAtomically = async (payload, options = {}) => {
     alreadySubmitted: result.alreadySubmitted === true,
     receivedAtMs: Number(result.receivedAtMs) || null,
   };
-};
+});
 
 // Build standardized payload
 const buildPayload = ({

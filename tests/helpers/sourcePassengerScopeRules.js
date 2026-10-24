@@ -60,7 +60,7 @@ const sourcePassengerScopeGuard = tour => {
     + ` && ${booking}.child('sourceRoster/state').val() === 'active')))`;
 };
 const constrainSourcePassengerRule = (rule, tour) => `(${rule}) && (`
-  + "auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' || root.child('admin_users/' + auth.uid).val() === true"
+  + "(auth.uid === '9CWQ4705gVRkfW5Xki5LyvrmVp23' && auth.token.firebase.sign_in_second_factor === 'totp') || (root.child('admin_users/' + auth.uid).val() === true && auth.token.firebase.sign_in_second_factor === 'totp')"
   + " || root.child('app_sessions/' + auth.uid + '/principalType').val() === 'driver'"
   + ` || ${sourcePassengerScopeGuard(tour)})`;
 

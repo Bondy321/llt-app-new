@@ -495,6 +495,24 @@ const markNotificationRead = async ({
   return now;
 };
 
+const currentNoticeOwner = (getContext, tourId, authOverride) => {
+  const { authUid, appSession } = getContext?.() || {};
+  const { validateAppSession } = require('./appSessionService');
+  const session = validateAppSession(appSession);
+  const currentAuth = authOverride === undefined ? getFirebaseServices().auth : authOverride;
+  if (currentAuth?.currentUser?.uid !== authUid) throw new Error('The current authentication identity changed');
+  if (!authUid || !session || session.tourId !== tourId) {
+    throw new Error('A current matching tour session is required to acknowledge this update');
+  }
+  return { userId: authUid, readStateOwnerId: session.principalId };
+};
+const acknowledgeCurrentNotice = async ({ getContext, tourId, noticeId, ...options }) => {
+  return markNotificationRead({ ...options, tourId, noticeId, ...currentNoticeOwner(getContext, tourId, options.auth) });
+};
+const acknowledgeCurrentNotices = async ({ getContext, tourId, noticeIds, ...options }) => {
+  return markAllNotificationsRead({ ...options, tourId, noticeIds, ...currentNoticeOwner(getContext, tourId, options.auth) });
+};
+
 const markAllNotificationsRead = async ({
   tourId,
   userId,
@@ -527,6 +545,8 @@ module.exports = {
   loadNotificationFeedCache,
   markAllNotificationsRead,
   markNotificationRead,
+  acknowledgeCurrentNotice,
+  acknowledgeCurrentNotices,
   normalizeTourNotice,
   parseCachedFeed,
   persistNotificationFeedCache,

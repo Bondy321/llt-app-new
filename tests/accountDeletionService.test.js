@@ -667,3 +667,89 @@ test('mobile account deletion source has no remote deletion-authority imports', 
     assert.equal(source.includes(forbidden), false, forbidden);
   }
 });
+
+for (const phase of ['token', 'appCheck', 'fetch', 'body']) test(`deletion ${phase} timeout retains its receipt and refuses late accepted status`, async () => {
+  const storage = makeStorage(); let release; let calls = 0;
+  const delayed = new Promise(resolve => { release = resolve; });
+  const firebase = firebaseBoundary();
+  if (phase === 'token') firebase.auth.currentUser.getIdToken = () => delayed;
+  firebase.getCurrentAppCheckToken = () => phase === 'appCheck' ? delayed : Promise.resolve('attestation');
+  const api = createAccountDeletionService({ persistence: storage, generateReceipt: () => RECEIPT,
+    getFirebase: () => firebase, requestTimeoutMs: 15,
+    fetchFn: async () => { calls++; return phase === 'fetch' ? delayed : { ok: true, status: 202,
+      json: () => phase === 'body' ? delayed : Promise.resolve({ success: true, status: 'accepted', phase: 'reserved', retryable: true }) }; } });
+  const result = await api.requestDeletion({ expectedSessionId: SESSION_ID });
+  assert.equal(result.success, false); assert.equal(result.reason, 'NETWORK_ERROR');
+  const saved = await api.readPending(); assert.equal(saved.deletionReceipt, RECEIPT); assert.equal(saved.state, 'requesting');
+  const callsAtDeadline = calls;
+  release(phase === 'fetch' ? response(202, { success: true, status: 'accepted', phase: 'reserved', retryable: true }) : phase === 'body'
+    ? { success: true, status: 'accepted', phase: 'reserved', retryable: true } : 'late-token');
+  await new Promise(setImmediate);
+  assert.equal(calls, callsAtDeadline); assert.equal((await api.readPending()).state, 'requesting');
+});
+
+
+for (const sameUid of [false, true]) test(`late recovery token failure cannot replace a ${sameUid ? 'same-UID' : 'different-UID'} successor`, async () => {
+  let rejectToken; let tokenStarted;
+  const started = new Promise(resolve => { tokenStarted = resolve; });
+  const oldUser = { uid: 'old', getIdToken: () => { tokenStarted(); return new Promise((_resolve, reject) => { rejectToken = reject; }); } };
+  const successor = { uid: sameUid ? 'old' : 'successor', getIdToken: async () => 'new-token' };
+  const firebase = { auth: { currentUser: oldUser }, authHelpers: {}, getCurrentAppCheckToken: async () => null };
+  let replacements = 0; let requests = 0;
+  firebase.authHelpers.replaceWithFreshAnonymous = async () => { replacements++; throw new Error('must not replace successor'); };
+  const api = createAccountDeletionService({ persistence: makeStorage(), getFirebase: () => firebase,
+    fetchFn: async () => { requests++; throw new Error('must not dispatch'); } });
+  await api.writePending({ schemaVersion: 3, deletionReceipt: RECEIPT, originalAuthUid: 'old',
+    state: 'accepted', phase: 'auth_delete', retryable: true, createdAtMs: 100, updatedAtMs: 100,
+    requestAttempts: 1, statusAttempts: 0, localCleanupState: 'complete', localCleanupComplete: true, completionHandled: false });
+  const pending = api.pollStatus();
+  await started; firebase.auth.currentUser = successor; rejectToken(new Error('old token expired'));
+  assert.equal((await pending).success, false);
+  assert.equal(firebase.auth.currentUser, successor);
+  assert.equal(replacements, 0); assert.equal(requests, 0);
+  assert.equal((await api.readPending()).deletionReceipt, RECEIPT);
+});
+
+const { replaceWithFreshAnonymousUser } = require('../services/freshAnonymousAuth');
+for (const stage of ['restore', 'clearStorage']) test(`fresh anonymous helper fences same-UID successors after ${stage}`, async () => {
+  let release; let reached;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { reached = resolve; });
+  const oldUser = { uid: 'same' }; const successor = { uid: 'same' }; const auth = { currentUser: oldUser };
+  const calls = [];
+  const pending = replaceWithFreshAnonymousUser({ auth, expectedUser: oldUser,
+    restoreReady: async () => { if (stage === 'restore') { reached(); await gate; } },
+    signOut: async () => { calls.push('signOut'); auth.currentUser = null; },
+    signInAnonymously: async () => { calls.push('signIn'); throw new Error('must not sign in'); },
+    persistence: {
+      clearAuthState: async () => { calls.push('clear'); if (stage === 'clearStorage') { reached(); await gate; } },
+      saveAuthState: async () => { calls.push('save'); },
+    },
+  });
+  const rejected = assert.rejects(pending, { code: 'AUTH_IDENTITY_CHANGED' });
+  await started; auth.currentUser = successor; release(); await rejected;
+  assert.equal(auth.currentUser, successor);
+  assert.deepEqual(calls, stage === 'restore' ? [] : ['signOut', 'clear']);
+});
+
+test('fresh anonymous helper checks the caller deadline after restoration before any mutation', async () => {
+  const oldUser = { uid: 'old' }; const auth = { currentUser: oldUser }; let expired = false; let mutations = 0;
+  await assert.rejects(replaceWithFreshAnonymousUser({ auth,
+    restoreReady: async () => { expired = true; },
+    checkBoundary: () => { if (expired) throw Object.assign(new Error('expired'), { code: 'REQUEST_TIMEOUT' }); },
+    signOut: async () => { mutations++; }, signInAnonymously: async () => { mutations++; },
+    persistence: { clearAuthState: async () => { mutations++; }, saveAuthState: async () => { mutations++; } },
+  }), { code: 'REQUEST_TIMEOUT' });
+  assert.equal(mutations, 0); assert.equal(auth.currentUser, oldUser);
+});
+
+test('fresh anonymous helper preserves the supported recovery replacement flow', async () => {
+  const oldUser = { uid: 'old' }; const freshUser = { uid: 'fresh' }; const auth = { currentUser: oldUser }; const calls = [];
+  const result = await replaceWithFreshAnonymousUser({ auth, expectedUser: oldUser,
+    restoreReady: async () => { calls.push('restore'); },
+    signOut: async () => { calls.push('signOut'); auth.currentUser = null; },
+    signInAnonymously: async () => { calls.push('signIn'); auth.currentUser = freshUser; return { user: freshUser }; },
+    persistence: { clearAuthState: async () => { calls.push('clear'); }, saveAuthState: async user => { assert.equal(user, freshUser); calls.push('save'); } },
+  });
+  assert.equal(result, freshUser); assert.deepEqual(calls, ['restore', 'signOut', 'clear', 'signIn', 'save']);
+});

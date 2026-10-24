@@ -66,7 +66,7 @@ test('the installed location plugin generates foreground permissions without And
 });
 
 test('native tracking uses the new appVersion runtime and retains remote build incrementing', () => {
-  assert.equal(appConfig.version, '1.0.7');
+  assert.equal(appConfig.version, '1.1.0');
   assert.deepEqual(appConfig.runtimeVersion, { policy: 'appVersion' });
   assert.equal(eas.cli.appVersionSource, 'remote');
   assert.equal(eas.build.production.autoIncrement, true);

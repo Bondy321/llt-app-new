@@ -1,6 +1,6 @@
 import { mergeMessagesById } from './chatShared';
 // screens/ChatScreen.js - Premium Chat Experience
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import * as Haptics from '../../services/hapticsService';
 import { sendInternalDriverMessage, sendMessage, setTypingStatus } from '../../services/chatService';
 import { checkTextForObjectionableContent } from '../../services/contentModerationService';
@@ -33,9 +33,14 @@ export default function useChatTextSending(context, late) {
     typingTimeoutRef,
     userName
   } = context;
+  const scopeKey = `${authUid || ''}:${principalId || ''}:${tourId || ''}:${chatScope || ''}:${offlineSessionScope?.sessionId || ''}`;
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
+  useEffect(() => () => { currentScope.current = null; }, []);
   // Send message handler
   const handleSendMessage = useCallback(async () => {
     if (sending) return;
+    const isCurrent = () => currentScope.current === scopeKey;
     const trimmed = inputText.trim();
     if (!trimmed) return;
     const moderationResult = checkTextForObjectionableContent(trimmed);
@@ -51,8 +56,6 @@ export default function useChatTextSending(context, late) {
     const pendingReply = replyingToMessage;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSending(true);
-    setInputText('');
-    setReplyingToMessage(null);
 
     // Clear typing status
     if (typingTimeoutRef.current) {
@@ -63,8 +66,8 @@ export default function useChatTextSending(context, late) {
       sessionScope: offlineSessionScope
     });
     if (requiresPassengerStableIdForWrites && !passengerStableId) {
-      setInputText(trimmed);
-      setReplyingToMessage(pendingReply);
+      setInputText(value => !value || value === inputText ? trimmed : value);
+      setReplyingToMessage(value => value || pendingReply);
       setSending(false);
       showTransientFeedback({
         type: 'warning',
@@ -118,8 +121,10 @@ export default function useChatTextSending(context, late) {
         messageId: optimisticId,
         idempotencyKey: optimisticId,
         replyTo: pendingReply || undefined,
+        onDurable: () => { if (isCurrent()) { setInputText(value => value === inputText ? '' : value); setReplyingToMessage(value => value === pendingReply ? null : value); } },
         online: isConnected
       });
+      if (!isCurrent()) return;
       if (!result?.success || !result?.message) {
         logger.warn('ChatScreen', 'chat_send_result_failed', {
           tourId,
@@ -129,8 +134,8 @@ export default function useChatTextSending(context, late) {
           queued: Boolean(result?.queued)
         });
         setMessages(prev => prev.filter(msg => msg.id !== optimisticId));
-        setInputText(trimmed);
-        setReplyingToMessage(pendingReply);
+        setInputText(value => !value || value === inputText ? trimmed : value);
+        setReplyingToMessage(value => value || pendingReply);
         showTransientFeedback({
           type: 'warning',
           icon: 'message-alert-outline',
@@ -153,6 +158,7 @@ export default function useChatTextSending(context, late) {
         setMessages(prev => mergeMessagesById(prev, [confirmedMessage]));
         if (!result.queued && result.serverPromise?.finally) {
           result.serverPromise.then(() => {
+            if (!isCurrent()) return;
             logger.info('ChatScreen', 'chat_send_server_delivery_confirmed', {
               tourId,
               chatScope: internalDriverChat ? 'internal' : 'group',
@@ -163,6 +169,7 @@ export default function useChatTextSending(context, late) {
               status: 'delivered'
             } : msg));
           }).catch(deliveryError => {
+            if (!isCurrent()) return;
             logger.warn('ChatScreen', 'chat_send_server_delivery_failed', {
               tourId,
               chatScope: internalDriverChat ? 'internal' : 'group',
@@ -181,6 +188,7 @@ export default function useChatTextSending(context, late) {
         }
       }
     } catch (error) {
+      if (!isCurrent()) return;
       logger.error('ChatScreen', 'chat_send_threw', {
         tourId,
         chatScope: internalDriverChat ? 'internal' : 'group',
@@ -189,8 +197,8 @@ export default function useChatTextSending(context, late) {
         code: error?.code || null
       });
       setMessages(prev => prev.filter(msg => msg.id !== optimisticId));
-      setInputText(trimmed);
-      setReplyingToMessage(pendingReply);
+      setInputText(value => !value || value === inputText ? trimmed : value);
+      setReplyingToMessage(value => value || pendingReply);
       showTransientFeedback({
         type: 'warning',
         icon: 'message-alert-outline',
@@ -198,10 +206,9 @@ export default function useChatTextSending(context, late) {
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
-      await refreshQueueStats();
+      if (isCurrent()) { setSending(false); await refreshQueueStats(); }
     }
-    setSending(false);
-  }, [sending, inputText, replyingToMessage, setSending, setInputText, setReplyingToMessage, typingTimeoutRef, tourId, statusActorId, userName, isDriver, chatScope, offlineSessionScope, requiresPassengerStableIdForWrites, passengerStableId, buildChatSenderInfo, logSenderIdentityPath, internalDriverChat, setMessages, scrollToBottom, showTransientFeedback, principalId, authUid, isConnected, refreshQueueStats]);
+  }, [scopeKey, sending, inputText, replyingToMessage, setSending, setInputText, setReplyingToMessage, typingTimeoutRef, tourId, statusActorId, userName, isDriver, chatScope, offlineSessionScope, requiresPassengerStableIdForWrites, passengerStableId, buildChatSenderInfo, logSenderIdentityPath, internalDriverChat, setMessages, scrollToBottom, showTransientFeedback, principalId, authUid, isConnected, refreshQueueStats]);
   Object.assign(late.current, {
     handleSendMessage
   });

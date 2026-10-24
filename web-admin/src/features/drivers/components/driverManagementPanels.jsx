@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import StaffDeviceEnrolment from './StaffDeviceEnrolment';
 import { applyDriverAssignmentMutation } from '../../../services/tourService';
 import { createDriver, updateDriverContactProjection } from '../../../services/driverService';
 import { APP_SESSION_REVOCATION_REASONS, maskAppSessionId, revokeAppSession, subscribeToAppSession } from '../../../services/appSessionAdminService';
@@ -382,6 +383,7 @@ function DriverDetailsPanel({ driverId, driver }) {
         </Tabs.List>
 
         <Tabs.Panel value="details">
+          <StaffDeviceEnrolment key={driverId} driverId={driverId} />
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Stack gap="md">
               <TextInput

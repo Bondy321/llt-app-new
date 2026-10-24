@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { AppState, Platform } from 'react-native';
-import { auth } from '../../firebase';
+import { auth, getCurrentAppCheckToken } from '../../firebase';
 import appSessionService from '../appSessionService';
 import { createDriverTrackingController } from './createDriverTrackingController';
 import { createTrackingRestRepository } from './trackingRestRepository';
@@ -50,6 +50,7 @@ const native = {
 };
 
 const transport = createTrackingRestRepository({ auth,
+  getAppCheckToken: getCurrentAppCheckToken,
   baseUrl: process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL || '',
   retireEndpoint: process.env.EXPO_PUBLIC_DRIVER_TRACKING_STOP_URL?.trim()
     || (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID

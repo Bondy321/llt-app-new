@@ -34,10 +34,9 @@ const resolveSafetyReporterAccess = async ({ db, authUid, tourId, requestedRole 
     return { allowed: true, role: 'driver', principalId: `driver:${driverId}` };
   }
   if (requestedRole === 'passenger' && participantSnapshot.exists()) {
-    const principalId = resolveTrimmedString(userData.stablePassengerId)
-      || resolveTrimmedString(userData.privatePhotoOwnerId)
-      || authUid;
-    return { allowed: true, role: 'passenger', principalId };
+    const access = await verifyActiveAppSession({ db, authUid,
+      expectedTourId: tourId, expectedRole: 'passenger' });
+    if (access.allowed) return { allowed: true, role: 'passenger', principalId: access.principalId };
   }
   return { allowed: false, role: requestedRole, principalId: null };
 };

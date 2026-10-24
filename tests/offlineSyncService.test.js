@@ -708,7 +708,8 @@ test('replay stops before the next action when the signed-in session changes', a
   assert.equal(replay.success, true);
   assert.deepEqual(delivered, ['session-change-1']);
   const remaining = await rawQueueApi.getQueuedActions({ includeAll: true });
-  assert.deepEqual(remaining.data.map((action) => action.id), ['session-change-2']);
+  assert.deepEqual(remaining.data.map((action) => action.id), ['session-change-1', 'session-change-2'],
+    'a completion after identity change cannot remove retained work; immutable IDs make later retry safe');
 });
 
 test('explicitly scoped queue subscribers never follow a later active session', async () => {
@@ -875,6 +876,7 @@ test('manifest replay reports reconciliation outcomes before removing processed 
   await clearQueue();
   await offlineSyncService.enqueueAction({
     id: 'manifest-conflict-outcome',
+    scope: { ...testScope('TOUR_1', 'driver:D-TEST', 'driver'), cacheOwnerId: 'D-TEST' },
     type: 'MANIFEST_UPDATE',
     tourId: 'TOUR_1',
     payload: { tourCode: 'TOUR_1', bookingRef: 'ABC123', passengerStatuses: ['BOARDED'] },
@@ -886,6 +888,7 @@ test('manifest replay reports reconciliation outcomes before removing processed 
         applyManifestUpdateDirect: async () => ({
           success: true,
           reconciled: true,
+          passengerStatus: ['NO_SHOW'],
           status: 'NO_SHOW',
           conflict: { bookingRef: 'ABC123', serverStatus: 'NO_SHOW', attemptedStatus: 'BOARDED' },
         }),

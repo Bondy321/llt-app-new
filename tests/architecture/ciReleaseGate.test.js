@@ -53,7 +53,8 @@ test('every production release workflow requires successful CI for its exact SHA
     const source = read(`.github/workflows/${workflow}`);
     assert.match(source, /actions: read/u, workflow);
     assert.match(source, /node scripts\/verifyCiRunForSha\.js --sha=\$\{\{ github\.sha \}\}/u, workflow);
-    assert.match(source, /eas-version:\s*22\.6\.0/u, workflow);
+    assert.match(source, /npm install --global eas-cli@22\.6\.0/u, workflow);
+    assert.match(source, /node scripts\/release\/checkCliVersions\.js --check-eas/u, workflow);
     assert.doesNotMatch(source, /(?:expo|eas)-version:\s*latest/u, workflow);
   }
 
@@ -62,15 +63,20 @@ test('every production release workflow requires successful CI for its exact SHA
   assert.match(gate, /run\.head_sha === sha && run\.conclusion === 'success'/u);
 
   const testflight = read('.github/workflows/eas-testflight.yml');
-  assert.match(testflight, /Selected EAS build belongs to/u);
-  assert.match(testflight, /builtSha !== releaseSha/u);
+  assert.match(testflight, /node scripts\/release\/verifyTestFlightBuild\.js eas-selected-build\.json/u);
+  const artifactGate = read('scripts/release/verifyTestFlightBuild.js');
+  assert.match(artifactGate, /build\.gitCommitHash === releaseSha/u);
+  assert.match(artifactGate, /build\.status === 'FINISHED'/u);
+  assert.match(artifactGate, /build\.buildProfile === 'testflight'/u);
 });
 
 test('CI enforces native compatibility and resolved Expo profile parity against the exact change', () => {
   const source = read('.github/workflows/ci.yml');
   const packageJson = JSON.parse(read('package.json'));
 
-  assert.match(source, /fetch-depth:\s*0/u);
+  assert.match(source, /'\+refs\/heads\/\*:refs\/remotes\/origin\/\*' '\+refs\/tags\/\*:refs\/tags\/\*' "\$GITHUB_SHA"/u);
+  assert.doesNotMatch(source, /--depth[ =]|--shallow/u);
+  assert.match(source, /git checkout --detach "\$GITHUB_SHA"/u);
   assert.match(source, /LLT_RELEASE_BASE_SHA/u);
   assert.match(source, /LLT_RELEASE_HEAD_SHA:\s*\$\{\{ github\.sha \}\}/u);
   assert.match(source, /npm run release:compatibility:check/u);
@@ -79,14 +85,15 @@ test('CI enforces native compatibility and resolved Expo profile parity against 
   assert.match(packageJson.scripts['release:config:check'], /checkExpoConfigParity\.js/u);
 });
 
-test('native release workflows install and cache the web SDK used by real rules integration tests', () => {
+test('native release workflows clean-install the web SDK before real rules integration tests', () => {
   for (const workflow of ['eas-build.yml', 'eas-testflight.yml']) {
     const source = read(`.github/workflows/${workflow}`);
     const buildJob = source.split(/\n  submit-testflight:/u)[0];
     const install = buildJob.indexOf('run: npm --prefix web-admin ci');
     const rulesTest = buildJob.indexOf('run: npm run test:emulators');
     assert.ok(install >= 0 && rulesTest > install, `${workflow}: install the real web SDK before rules tests`);
-    assert.match(buildJob, /cache-dependency-path:\s*\|[^]*?web-admin\/package-lock\.json/u, workflow);
+    assert.match(buildJob, /uses: \.\/\.github\/actions\/verified-node/u, workflow);
+    assert.doesNotMatch(buildJob, /uses: actions\/|uses: \.\/\.github\/actions\/runtime-trust/u, workflow);
     if (workflow === 'eas-testflight.yml') {
       assert.match(buildJob, /name: Install web admin dependencies for integration tests\s+if: \$\{\{ !inputs\.eas_build_id \}\}\s+run: npm --prefix web-admin ci/u);
     }

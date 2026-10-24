@@ -37,6 +37,7 @@ test('synthetic source changes cross real active-session endpoint, shared contro
   const session = buildPassengerSessionRecord({ authUid: scope.authUid, principalId: scope.principalId,
     tourId: scope.tourId, sessionId: scope.sessionId, nowMs: now, expiresAtMs: now + 60000 });
   set(`app_sessions/${scope.authUid}`, session);
+  set(`app_session_authority/${scope.authUid}`, { schemaVersion: 1, state: 'committed', epoch: 'a'.repeat(48), sessionId: scope.sessionId });
   set(`users/${scope.authUid}`, { bookingRef: scope.bookingRef, stablePassengerId: scope.principalId,
     identityVersion: 'pax_v2', principalType: 'passenger' });
   set(`tours/${scope.tourId}/participants/${scope.authUid}`, { schemaVersion: 2, userId: scope.authUid,

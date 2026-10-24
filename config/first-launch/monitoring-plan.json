@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "projectId": "loch-lomond-travel",
+  "status": "prepared-not-applied",
+  "requiredOwnerValues": [
+    "verified notification channel",
+    "monthly GBP budget",
+    "warning and critical spend amounts"
+  ],
+  "logMetrics": [
+    {
+      "name": "llt_login_denials",
+      "description": "Denied login HTTP requests; no credential or identifier labels",
+      "filter": "resource.type=\"cloud_run_revision\" AND (resource.labels.service_name=\"verifypassengerlogin\" OR resource.labels.service_name=\"verifydriverlogin\") AND httpRequest.status>=400 AND httpRequest.status<500",
+      "metricDescriptor": {
+        "metricKind": "DELTA",
+        "valueType": "INT64",
+        "unit": "1"
+      },
+      "alertThreshold": {
+        "countPerMinute": 50,
+        "durationSeconds": 300
+      }
+    },
+    {
+      "name": "llt_rejected_access",
+      "description": "Rejected protected HTTP requests; no user, network or tour labels",
+      "filter": "resource.type=\"cloud_run_revision\" AND (httpRequest.status=401 OR httpRequest.status=403)",
+      "metricDescriptor": {
+        "metricKind": "DELTA",
+        "valueType": "INT64",
+        "unit": "1"
+      },
+      "alertThreshold": {
+        "countPerMinute": 100,
+        "durationSeconds": 300
+      }
+    },
+    {
+      "name": "llt_worker_errors",
+      "description": "Function worker failures and unhandled HTTP server errors",
+      "filter": "resource.type=\"cloud_run_revision\" AND (severity>=ERROR OR httpRequest.status>=500)",
+      "metricDescriptor": {
+        "metricKind": "DELTA",
+        "valueType": "INT64",
+        "unit": "1"
+      },
+      "alertThreshold": {
+        "countPerMinute": 5,
+        "durationSeconds": 300
+      }
+    },
+    {
+      "name": "llt_notification_health_reports",
+      "description": "One schema-2 queue health heartbeat per receipt scheduler invocation; no identifier labels",
+      "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processnotificationreceipts\" AND jsonPayload.message=\"Notification queue health\" AND jsonPayload.schemaVersion=2",
+      "metricDescriptor": {
+        "metricKind": "DELTA",
+        "valueType": "INT64",
+        "unit": "1"
+      }
+    }
+  ],
+  "logAlerts": [
+    {
+      "displayName": "LLT operational notification queue delayed",
+      "filter": "jsonPayload.message=\"Notification queue health\" AND (jsonPayload.queues.fanout.critical.oldestDueAgeMs>120000 OR jsonPayload.queues.fanout.operational.oldestDueAgeMs>300000 OR jsonPayload.queues.retry.critical.oldestDueAgeMs>120000 OR jsonPayload.queues.receipt.critical.oldestDueAgeMs>900000 OR jsonPayload.queues.retry.operational.oldestDueAgeMs>600000 OR jsonPayload.queues.receipt.operational.oldestDueAgeMs>900000)",
+      "notificationPeriodSeconds": 900
+    },
+    {
+      "displayName": "LLT marketing delivery backlog",
+      "filter": "jsonPayload.message=\"Notification queue health\" AND (jsonPayload.queues.fanout.marketing.oldestDueAgeMs>3600000 OR jsonPayload.queues.retry.marketing.oldestDueAgeMs>3600000 OR jsonPayload.queues.receipt.marketing.oldestDueAgeMs>3600000)",
+      "notificationPeriodSeconds": 3600
+    },
+    {
+      "displayName": "LLT account deletion delayed or failed",
+      "filter": "jsonPayload.event=\"account_deletion_queue_health\" AND (jsonPayload.oldestDueAgeMs>3600000 OR jsonPayload.failed>0)",
+      "notificationPeriodSeconds": 900
+    },
+    {
+      "displayName": "LLT media upload cleanup delayed",
+      "filter": "jsonPayload.message=\"Media upload cleanup health\" AND jsonPayload.oldestDueAgeMs>3600000",
+      "notificationPeriodSeconds": 900
+    }
+  ],
+  "existingDiagnostics": {
+    "mobile": "Review sanitized crash diagnostics by exact release version; alert on new fatal signatures or a material crash-free-session decrease after a sufficient sample. Do not infer rates without a session denominator.",
+    "usage": "Enable Cloud Monitoring request/latency/instance metrics and billing-budget actual/forecast notifications with owner-entered amounts. Review RTDB downloads, Storage egress and Functions CPU/instance time.",
+    "hardBounds": "Retain declared Function maxInstances/concurrency/timeouts, database batch limits, media byte/pixel bounds and aggregate Expo provider budget. Budget alerts do not cap spending. Do not disable essential services automatically."
+  },
+  "metricAlerts": [
+    {
+      "displayName": "LLT notification queue health silent",
+      "combiner": "OR",
+      "enabled": true,
+      "conditions": [
+        {
+          "displayName": "No schema-2 health reports for ten minutes",
+          "conditionThreshold": {
+            "filter": "metric.type=\"logging.googleapis.com/user/llt_notification_health_reports\" AND resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processnotificationreceipts\"",
+            "aggregations": [
+              {
+                "alignmentPeriod": "60s",
+                "perSeriesAligner": "ALIGN_SUM",
+                "crossSeriesReducer": "REDUCE_SUM",
+                "groupByFields": []
+              }
+            ],
+            "comparison": "COMPARISON_LT",
+            "thresholdValue": 1,
+            "duration": "600s",
+            "evaluationMissingData": "EVALUATION_MISSING_DATA_ACTIVE",
+            "trigger": {
+              "count": 1
+            }
+          }
+        }
+      ],
+      "activationRequirements": [
+        "Attach the owner-verified notification channel before enabling.",
+        "Confirm a real schema-2 heartbeat reaches the metric after policy creation; a never-started service is not proved monitored.",
+        "In an isolated environment, suppress heartbeats for over ten minutes and confirm the incident and notification, then confirm recovery."
+      ]
+    }
+  ]
+}

@@ -60,7 +60,7 @@ test('security updates bind only the server-issued identity and remove legacy bi
   });
 });
 
-test('verified second phone is added without replacing legacy authority, principal or history', async () => {
+test('verified phone is added without promoting old scalar authority or replacing principal history', async () => {
   let stored = { passengerPrincipalId: OPAQUE_ID, authorizedAuthUid: 'victim-auth' };
   const securityRef = {
     async transaction(updater) {
@@ -73,9 +73,9 @@ test('verified second phone is added without replacing legacy authority, princip
   await authorizePassengerLoginDevice({ securityRef, authUid: 'second-phone' });
   assert.equal(stored.authorizedAuthUid, 'victim-auth');
   assert.equal(stored.deviceAuthorizationVersion, 2);
-  assert.deepEqual(stored.authorizedAuthUids, { 'victim-auth': true, 'second-phone': true });
+  assert.deepEqual(stored.authorizedAuthUids, { 'second-phone': true });
   assert.equal(stored.passengerPrincipalId, OPAQUE_ID);
-  assert.equal(isPassengerDeviceAuthorized(stored, 'victim-auth'), true);
+  assert.equal(isPassengerDeviceAuthorized(stored, 'victim-auth'), false);
   assert.equal(isPassengerDeviceAuthorized(stored, 'second-phone'), true);
   assert.equal(isPassengerDeviceAuthorized(stored, 'unverified-phone'), false);
   const first = JSON.stringify(stored);
@@ -85,7 +85,7 @@ test('verified second phone is added without replacing legacy authority, princip
 
 test('versioned membership fails closed and legacy authority cannot bypass explicit map withdrawal', () => {
   const legacy = { authorizedAuthUid: 'old-phone' };
-  assert.equal(isPassengerDeviceAuthorized(legacy, 'old-phone'), true);
+  assert.equal(isPassengerDeviceAuthorized(legacy, 'old-phone'), false);
   assert.equal(isPassengerDeviceAuthorized(legacy, 'new-phone'), false);
   for (const value of [undefined, null, false, 'true', 1]) {
     const current = { ...legacy, deviceAuthorizationVersion: 2, authorizedAuthUids: { 'old-phone': value, 'new-phone': true } };

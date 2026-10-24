@@ -174,6 +174,8 @@ test('the durable receipt survives the actual local purge while offline and noti
   const localValues = new Map(APP_LOCAL_KEYS.map((key) => [key, 'private-local-value']));
   const removedKeys = [];
   const storage = {
+    async getItem(key) { return localValues.get(key) ?? null; },
+    async setItem(key, value) { localValues.set(key, value); },
     async multiRemove(keys) {
       removedKeys.push(...keys);
       keys.forEach((key) => localValues.delete(key));
@@ -194,6 +196,7 @@ test('the durable receipt survives the actual local purge while offline and noti
   });
   const result = await cleanup.cleanup({
     authUid: 'old-auth',
+    discardQueuedActions: true,
     appSession: {
       sessionId: SESSION_ID,
       principalType: 'passenger',
@@ -205,7 +208,8 @@ test('the durable receipt survives the actual local purge while offline and noti
   });
 
   assert.equal(result.success, true);
-  APP_LOCAL_KEYS.forEach((key) => assert.equal(localValues.has(key), key === '@LLT:pendingSessionEnd:v1', key));
+  const retainedRecoveryKeys = new Set(['@LLT:pendingSessionEnd:v1', '@LLT:safetyOfflineQueue', '@LLT:safetyOfflineQueue:corruptBackup']);
+  APP_LOCAL_KEYS.forEach((key) => assert.equal(localValues.has(key), retainedRecoveryKeys.has(key), key));
   assert.deepEqual(calls[0], ['offline-scope', null]);
   assert.equal(calls.some(([kind]) => kind === 'offline-actions'), true);
   assert.equal(calls.some(([kind]) => kind === 'notification-cache'), true);

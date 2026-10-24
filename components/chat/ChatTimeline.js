@@ -21,6 +21,7 @@ export const MessageBubble = React.memo(({
   onReactionPress,
   onDoubleTapReaction,
   onOpenImage,
+  onRetryMedia,
   onJumpToMessage,
   renderHighlightedText,
   formatTime,
@@ -99,6 +100,11 @@ export const MessageBubble = React.memo(({
             </TouchableOpacity>}
 
           {isImage && message?.imageUrl && <ImageMessage imageUrl={message.imageUrl} onPress={() => onOpenImage(message.imageUrl)} imageSize={chatImageSize} />}
+          {isImage && !message?.imageUrl && <TouchableOpacity
+            onPress={() => onRetryMedia?.(message)} disabled={message.mediaState === 'loading'}
+            accessibilityRole="button" accessibilityLabel="Retry loading photo">
+            <Text style={styles.messageText}>{message.mediaState === 'loading' ? 'Loading photo…' : 'Photo unavailable. Tap to retry.'}</Text>
+          </TouchableOpacity>}
 
           {!!message?.text && <Text style={[styles.messageText, isSelf && styles.myMessageText]}>
               {textParts.map((part, index) => part.type === 'link' ? <Text key={`${message.id}-link-${index}`} style={[styles.linkInMessage, isSelf && styles.linkInMessageSelf]} onPress={() => openChatExternalLink(part.content)}>

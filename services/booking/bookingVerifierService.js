@@ -1,3 +1,4 @@
+const { boundedNetworkDecision } = require('../boundedNetworkDecision');
 const {
   auth,
   buildDerivedDriverLoginVerifierUrl,
@@ -5,8 +6,7 @@ const {
   buildDriverLoginVerifierUrl,
   buildLoginVerifierEndpointCandidates,
   buildPassengerLoginVerifierUrl,
-  fetchWithTimeout,
-  getAppCheckHeaderValue,
+  fetchJsonWithTimeout,
   getFirebaseAuthHeaderValue,
   getPassengerLoginVerifierTimeoutMs,
   logBookingEvent,
@@ -28,7 +28,10 @@ const mapDriverVerifierReason = (reason) => {
     ASSIGNMENT_UNAVAILABLE: 'Your assigned tour is unavailable or its driver assignment needs attention. Please contact dispatch, then try signing in again.',
     DRIVER_ALREADY_LINKED: 'This driver code is already linked to another device. Please contact dispatch if this is unexpected.',
     DRIVER_LOGIN_IN_PROGRESS: 'Another sign-in for this driver is finishing. Please try again.',
-    DRIVER_NOT_FOUND: 'Driver code not found',
+    DRIVER_NOT_FOUND: 'Driver ID not found',
+    STAFF_ENROLMENT_REQUIRED: 'Enter the one-time device enrolment code provided by dispatch.',
+    STAFF_ENROLMENT_INVALID: 'This enrolment code has expired, was used on another phone, or has been revoked. Ask dispatch for a new code.',
+    SESSION_CHANGED: 'This sign-in was superseded. Ask dispatch for a fresh device enrolment code.',
     DRIVER_POLICY_CHANGE_IN_PROGRESS: 'Driver sign-in settings are being updated. Please try again.',
     INVALID_CREDENTIALS: 'Secure driver sign-in is still starting. Please wait a moment and try again.',
     INVALID_INPUT: 'Invalid driver code provided',
@@ -40,7 +43,7 @@ const mapDriverVerifierReason = (reason) => {
   return reasonToMessage[reason] || 'Unable to verify driver code. Please try again shortly.';
 };
 
-const verifyDriverLoginIdentity = async ({ driverId }) => {
+const verifyDriverLoginIdentity = async ({ driverId, enrolmentSecret }) => {
   const configuredEndpoint = buildDriverLoginVerifierUrl();
   const derivedEndpoint = buildDerivedDriverLoginVerifierUrl();
   logBookingEvent('info', 'Driver verifier request prepared', {
@@ -73,7 +76,9 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
     });
     return {
       valid: false,
-      error: mapDriverVerifierReason('INVALID_CREDENTIALS'),
+      error: firebaseAuthResult.reason === 'APPCHECK_TOKEN_UNAVAILABLE'
+        ? 'App security check could not be completed. Update the app or reconnect and try again.'
+        : mapDriverVerifierReason('INVALID_CREDENTIALS'),
     };
   }
 
@@ -85,7 +90,7 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
   const useAppCheck = shouldUseAppCheckForPassengerVerifier();
   const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
   const appCheckResult = useAppCheck
-    ? await getAppCheckHeaderValue()
+    ? firebaseAuthResult.appCheckResult
     : { success: false, reason: 'APPCHECK_DISABLED' };
   if (strictAppCheck && !appCheckResult.success) {
     return {
@@ -98,20 +103,19 @@ const verifyDriverLoginIdentity = async ({ driverId }) => {
   }
 
   for (const endpoint of endpointCandidates) {
-    let response;
+    let response; let payload;
     try {
-      response = await fetchWithTimeout(endpoint, {
+      ({ response, payload } = await fetchJsonWithTimeout(endpoint, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ driverId }),
-      });
+        body: JSON.stringify({ driverId, enrolmentSecret }),
+      }));
     } catch (error) {
       if (error?.name === 'AbortError') {
         return { valid: false, error: 'Driver verification timed out. Check your connection and try again.' };
       }
       return { valid: false, error: 'Driver verification is temporarily unavailable. Please try again shortly.' };
     }
-    const payload = await response.json().catch(() => null);
 
     if (!payload) {
       if (response.status === 404) {
@@ -180,21 +184,16 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
     return { valid: false, reason: 'VERIFIER_NOT_CONFIGURED' };
   }
 
-  const controller = new AbortController();
   const timeoutMs = getPassengerLoginVerifierTimeoutMs();
-  let timeoutHandle;
+  const deadlineAt = Date.now() + timeoutMs;
 
   try {
-    timeoutHandle = setTimeout(() => {
-      controller.abort();
-    }, timeoutMs);
-
     const useAppCheck = shouldUseAppCheckForPassengerVerifier();
     const strictAppCheck = shouldRequireAppCheckForPassengerVerifier();
-    const appCheckResult = useAppCheck
-      ? await getAppCheckHeaderValue()
-      : { success: false, reason: 'APPCHECK_DISABLED' };
     const firebaseAuthResult = await getFirebaseAuthHeaderValue();
+    const appCheckResult = useAppCheck
+      ? firebaseAuthResult.appCheckResult || { success: false, reason: firebaseAuthResult.reason }
+      : { success: false, reason: 'APPCHECK_DISABLED' };
 
     recordLoginDiagnostic('passenger_verifier_security_headers_prepared', {
       bookingRef,
@@ -221,7 +220,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
       });
       return {
         valid: false,
-        reason: 'VERIFIER_AUTH_UNAVAILABLE',
+        reason: firebaseAuthResult.reason === 'APPCHECK_TOKEN_UNAVAILABLE' ? 'VERIFIER_APPCHECK_UNAVAILABLE' : 'VERIFIER_AUTH_UNAVAILABLE',
         authFailureReason: firebaseAuthResult.reason,
       };
     }
@@ -269,14 +268,11 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
         hasAppCheckHeader: Boolean(headers['x-firebase-appcheck']),
         bodyKeys: ['bookingRef', 'email'],
       }, diagnostics);
-      const response = await fetch(endpoint, {
+      const { response, payload } = await fetchJsonWithTimeout(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({ bookingRef, email }),
-        signal: controller.signal,
-      });
-
-      const payload = await response.json().catch(() => null);
+      }, deadlineAt - Date.now());
       recordLoginDiagnostic('passenger_verifier_fetch_completed', {
         bookingRef,
         endpoint,
@@ -359,7 +355,7 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
       // Force a token refresh before Storage is used so restored identities receive
       // their signed owner scope immediately rather than after the normal token TTL.
       if (payload?.valid === true && auth?.currentUser?.getIdToken) {
-        await auth.currentUser.getIdToken(true);
+        await boundedNetworkDecision(() => auth.currentUser.getIdToken(true));
       }
       return payload;
     }
@@ -400,10 +396,6 @@ const verifyPassengerLoginIdentity = async ({ bookingRef, email, diagnostics } =
         : { code: error?.code || null, message: error?.message || String(error) },
     }, diagnostics);
     return { valid: false, reason: 'VERIFIER_REQUEST_FAILED' };
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
   }
 };
 

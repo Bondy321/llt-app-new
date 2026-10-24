@@ -14,15 +14,18 @@ const { acquireNotificationJobLease, calculateRetryDelayMs, ensureNotificationFa
 const { enumerateNotificationAudiencePage } = require('./notificationAudienceEnumerators');
 const { createNotificationAudiencePreparation } = require('./notificationAudiencePreparation');
 const { buildAttemptCountDeltaUpdates } = require('./notificationAttemptCounts');
+const { reserveProviderBudget } = require('./notificationProviderBudget');
+const { commitAttemptTransition, resumeAttemptPublication } = require('./notificationAttemptPublication');
 const { classifyExpoRequestError } = require('./expoRequestErrorClassifier');
 const { publishCriticalFanoutWarning } = require('./notificationFanoutFinalization');
 const {
+  expireLeasedNotificationJob,
   finalizeAndScheduleCompletedFanout,
   renewNotificationJobSubmissionFence,
   settleCompletedFanoutQueue,
 } = require('./notificationFanoutRetention');
 const { TERMINAL_NOTIFICATION_JOB_STATUSES } = require('./notificationJobStatus');
-const { QUEUE_ROOTS, buildNotificationQueueKey, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
+const { QUEUE_ROOTS, buildNotificationQueueKey, claimQueueEntry, loadFairDueQueueEntries, releaseClaimedQueueEntry,
   removeClaimedQueueEntry, transitionQueuedRecord } = require('./notificationQueues');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
 const { createNotificationRetrySubmission } = require('./notificationRetrySubmission');
@@ -54,9 +57,9 @@ const buildDeliveryAttemptId = (jobId, authUid, generation = 1) => `attempt_v2_$
   .digest('hex')}`;
 
 /**
- * All post-claim attempt state changes pass through here so queue membership and
- * the attempt state are one multi-location write. Aggregate deltas are bounded
- * and never scan delivery attempts.
+ * Post-claim changes use an exact-version attempt CAS followed by its durable
+ * queue/accounting publication outbox. Recovery replays the outbox before any
+ * successor transition; accounting never scans all delivery attempts.
  * @param {any} db @param {string} attemptId @param {any} current @param {any} patch @param {number} nowMs
  */
 const transitionDeliveryAttempt = async (db, attemptId, current, patch, nowMs) => {
@@ -70,17 +73,8 @@ const transitionDeliveryAttempt = async (db, attemptId, current, patch, nowMs) =
     dueAtMs = Number(next.retryLease?.expiresAtMs || next.submissionLease?.expiresAtMs || nowMs + 120_000);
   }
   if (next.receiptStatus === 'receipt_pending') { queueKind = 'receipt'; dueAtMs = next.receiptDueAtMs; }
-  const queue = await transitionQueuedRecord(db, {
-    targetPath: `notification_delivery_attempts/${attemptId}`,
-    current,
-    patch: { ...retentionPatch, updatedAtMs: nowMs },
-    queueKind,
-    dueAtMs,
-    targetId: attemptId,
-    additionalUpdates: buildAttemptCountDeltaUpdates(current.jobId || next.jobId, current, next),
-  });
-  const persisted = { ...next, queueKind, queueKey: queue.queueKey, queueVersion: queue.queueVersion };
-  return persisted;
+  return commitAttemptTransition(db, attemptId, current,
+    { ...retentionPatch, updatedAtMs: nowMs }, queueKind, dueAtMs);
 };
 
 /** @param {any} job @param {any} recipient @param {number} nowMs */
@@ -113,13 +107,14 @@ const buildExpoPushMessage = (job, recipient, nowMs = Date.now()) => {
 // eslint-disable-next-line complexity -- exact attempt/token idempotency handles every recoverable crash window
 const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1, metrics = null) => {
   const attemptId = buildDeliveryAttemptId(job.jobId, recipient.authUid, generation);
-  const recipientRef = db.ref(`notification_job_recipients/${job.jobId}/${recipient.authUid}`);
+  const recipientRef = db.ref(`notification_job_recipients_v2/${job.jobId}/${recipient.authUid}`);
   recordMetric(metrics, 'rtdbDirectReads');
   const existingRecipient = (await recipientRef.once('value')).val();
   if (existingRecipient) {
-    const existingAttempt = existingRecipient.attemptId
-      ? (recordMetric(metrics, 'rtdbDirectReads'), (await db.ref(`notification_delivery_attempts/${existingRecipient.attemptId}`).once('value')).val())
+    let existingAttempt = existingRecipient.attemptId
+      ? (recordMetric(metrics, 'rtdbDirectReads'), (await db.ref(`notification_delivery_attempts_v2/${existingRecipient.attemptId}`).once('value')).val())
       : null;
+    if (existingAttempt?.publicationPending) existingAttempt = await resumeAttemptPublication(db, existingAttempt);
     const represented = Boolean(existingAttempt && existingAttempt.jobId === job.jobId);
     return {
       claimed: false,
@@ -129,14 +124,15 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1, m
       attempt: existingAttempt,
     };
   }
-  const tokenClaimRef = db.ref(`notification_job_token_claims/${job.jobId}/${recipient.tokenHash}`);
+  const tokenClaimRef = db.ref(`notification_job_token_claims_v2/${job.jobId}/${recipient.tokenHash}`);
   recordMetric(metrics, 'transactionAttempts');
   const tokenClaim = await tokenClaimRef.transaction((current) => current || recipient.authUid);
   if (tokenClaim.snapshot.val() !== recipient.authUid) return { claimed: false, represented: false, reason: 'duplicate_token' };
-  const attemptRef = db.ref(`notification_delivery_attempts/${attemptId}`);
+  const attemptRef = db.ref(`notification_delivery_attempts_v2/${attemptId}`);
   const leaseOwnerId = randomUUID();
   const attempt = {
     schemaVersion: 2, attemptId, generation, jobId: job.jobId,
+    serviceLane: job.serviceLane || (job.audienceType === 'marketing' ? 'marketing' : job.priorityClass === 'critical' ? 'critical' : 'operational'),
     recipientUid: recipient.authUid, installationUid: recipient.authUid,
     tokenHash: recipient.tokenHash, status: 'prepared', ticketStatus: 'pending',
     receiptStatus: 'not_requested', retryable: false, attemptNumber: 1,
@@ -149,19 +145,9 @@ const claimDeliveryAttempt = async (db, job, recipient, nowMs, generation = 1, m
   const transaction = await attemptRef.transaction((current) => current || attempt);
   let persisted = transaction?.snapshot?.val?.() || null;
   const claimed = persisted?.submissionLease?.ownerId === leaseOwnerId;
+  if (persisted?.publicationPending) persisted = await resumeAttemptPublication(db, persisted);
   if (persisted?.status === 'prepared' && (!persisted.queueKey || persisted.queueKind !== 'retry' || persisted.countsPublished !== true)) {
-    const queue = await transitionQueuedRecord(db, {
-      targetPath: `notification_delivery_attempts/${attemptId}`,
-      current: persisted,
-      patch: { countsPublished: true },
-      queueKind: 'retry',
-      dueAtMs: persisted.submissionLease.expiresAtMs,
-      targetId: attemptId,
-      additionalUpdates: persisted.countsPublished === true
-        ? {}
-        : buildAttemptCountDeltaUpdates(job.jobId, null, { ...persisted, countsPublished: true }),
-    });
-    persisted = { ...persisted, countsPublished: true, queueKind: 'retry', queueKey: queue.queueKey, queueVersion: queue.queueVersion };
+    persisted = await transitionDeliveryAttempt(db, attemptId, persisted, { countsPublished: true }, nowMs);
   }
   await recipientRef.transaction((current) => current || {
     generation, attemptId, tokenHash: recipient.tokenHash, status: 'claimed', updatedAtMs: nowMs,
@@ -255,7 +241,7 @@ const compareAndInvalidateToken = async (db, recipient, reason, nowMs) => {
 
 /** @param {any} options */
 const persistTicketResult = async ({ db, job, claimed, recipient, ticket, nowMs }) => {
-  const current = (await claimed.attemptRef.once('value')).val() || claimed.attempt;
+  const current = claimed.attempt;
   if (ticket?.status === 'ok' && typeof ticket.id === 'string') {
     await transitionDeliveryAttempt(db, claimed.attemptId || current.attemptId, current, {
       status: 'receipt_pending', ticketStatus: 'ticket_accepted', receiptStatus: 'receipt_pending',
@@ -265,7 +251,11 @@ const persistTicketResult = async ({ db, job, claimed, recipient, ticket, nowMs 
     }, nowMs);
     return { ticketAccepted: 0, ticketRejected: 0, receiptPending: 0, retrying: 0 };
   }
-  const code = String(ticket?.details?.error || ticket?.code || 'PROVIDER_REJECTED').slice(0, 80);
+  if (!ticket || ticket.status !== 'error' || typeof ticket.details?.error !== 'string') {
+    await markSubmissionUnknown(db, job, claimed, nowMs, new Error('Malformed provider ticket'));
+    return { submissionUnknown: true };
+  }
+  const code = ticket.details.error.slice(0, 80);
   const retryable = RETRYABLE_TICKET_ERRORS.has(code);
   await transitionDeliveryAttempt(db, claimed.attemptId || current.attemptId, current, {
     status: retryable ? 'retrying' : 'ticket_rejected', ticketStatus: 'ticket_rejected',
@@ -274,19 +264,19 @@ const persistTicketResult = async ({ db, job, claimed, recipient, ticket, nowMs 
     submissionLease: null, safeErrorCode: code,
   }, nowMs);
   if (code === 'DeviceNotRegistered') await compareAndInvalidateToken(db, recipient, code, nowMs);
-  if (CONFIGURATION_TICKET_ERRORS.has(code)) await db.ref(`notification_delivery_warnings/${job.jobId}`).update({ jobId: job.jobId, severity: 'critical', code, status: 'open', updatedAtMs: nowMs });
+  if (CONFIGURATION_TICKET_ERRORS.has(code)) await db.ref(`notification_delivery_warnings_v2/${job.jobId}`).update({ jobId: job.jobId, severity: 'critical', code, status: 'open', updatedAtMs: nowMs });
   return { ticketAccepted: 0, ticketRejected: 0, receiptPending: 0, retrying: 0 };
 };
 
 /** Mark an externally ambiguous submission terminal: automatic retry could duplicate delivery. */
 const markSubmissionUnknown = async (db, job, claimed, nowMs, error) => {
-  const current = (await claimed.attemptRef.once('value')).val() || claimed.attempt;
+  const current = claimed.attempt;
   if (!current || current.status !== 'request_started') return { transitioned: false };
   await transitionDeliveryAttempt(db, claimed.attemptId || current.attemptId, current, {
     status: 'submission_unknown', ticketStatus: 'submission_unknown', receiptStatus: 'not_requested',
     retryable: false, submissionLease: null, safeErrorCode: 'SUBMISSION_UNKNOWN',
   }, nowMs);
-  await db.ref(`notification_delivery_warnings/${job.jobId}`).update({
+  await db.ref(`notification_delivery_warnings_v2/${job.jobId}`).update({
     jobId: job.jobId, severity: job.priorityClass === 'critical' ? 'critical' : 'warning',
     code: 'SUBMISSION_UNKNOWN', status: 'open', updatedAtMs: nowMs,
   });
@@ -295,14 +285,13 @@ const markSubmissionUnknown = async (db, job, claimed, nowMs, error) => {
 };
 
 /** @param {any} db @param {any} job @param {any} claimed @param {number} nowMs @param {any} error */
-// eslint-disable-next-line complexity -- classifier outcomes intentionally remain explicit and fail closed
 const handleExpoRequestFailure = async (db, job, claimed, nowMs, error) => {
   const classification = classifyExpoRequestError(error);
   if (classification.outcome === 'unknown') {
     await markSubmissionUnknown(db, job, claimed, nowMs, error);
     return classification;
   }
-  const current = (await claimed.attemptRef.once('value')).val() || claimed.attempt;
+  const current = claimed.attempt;
   if (!current || current.status !== 'request_started') return { ...classification, transitioned: false };
   const maxAttempts = Number(job.maxAttempts || 8);
   const exhausted = classification.outcome === 'retryable'
@@ -322,11 +311,11 @@ const handleExpoRequestFailure = async (db, job, claimed, nowMs, error) => {
     safeErrorCode,
   }, nowMs);
   if (classification.configuration) {
-    await db.ref(`notification_delivery_warnings/${job.jobId}`).update({
+    await db.ref(`notification_delivery_warnings_v2/${job.jobId}`).update({
       jobId: job.jobId, severity: 'critical', code: 'INVALID_CREDENTIALS', status: 'open', updatedAtMs: nowMs,
     });
   } else if (classification.outcome === 'retryable' && job.priorityClass === 'critical') {
-    await db.ref(`notification_delivery_warnings/${job.jobId}`).update({
+    await db.ref(`notification_delivery_warnings_v2/${job.jobId}`).update({
       jobId: job.jobId, tourId: job.tourId || null, eventId: job.eventId || null,
       severity: 'critical', code: safeErrorCode, status: 'open', updatedAtMs: nowMs,
     });
@@ -335,7 +324,7 @@ const handleExpoRequestFailure = async (db, job, claimed, nowMs, error) => {
 };
 
 const markRequestStarted = async (db, claimed, nowMs) => {
-  const current = (await claimed.attemptRef.once('value')).val() || claimed.attempt;
+  const current = claimed.attempt;
   const started = await transitionDeliveryAttempt(db, claimed.attemptId || current.attemptId, current, {
     status: 'request_started', requestStartedAtMs: nowMs,
   }, nowMs);
@@ -350,12 +339,21 @@ const { claimAudienceCandidate, prepareDeliveryPage } = createNotificationAudien
   transitionDeliveryAttempt,
 });
 
-const sendPreparedChunks = async (db, job, prepared, expo, nowMs) => {
+const sendPreparedChunks = async (db, job, prepared, expo, nowMs, providerClock = Date.now) => {
   for (const chunk of expo.chunkPushNotifications(prepared.map((item) => item.message))) {
     const items = chunk.map((message) => prepared.find((item) => item.message === message)).filter(Boolean);
-    // A local persistence failure happens before the provider request and must
-    // bubble to page recovery rather than being labelled submission-unknown.
+    if (!items.length) continue;
+    // Persist all request intentions before the final budget reservation. No
+    // network request is made if preparation or budget publication fails.
     for (const item of items) await markRequestStarted(db, item.claimed, nowMs);
+    const budget = await reserveProviderBudget({ db, count: items.length, marketing: job.audienceType === 'marketing', nowMs: providerClock() });
+    if (!budget.granted || providerClock() >= budget.expiresAtMs) {
+      for (const item of items) await transitionDeliveryAttempt(db, item.claimed.attemptId, item.claimed.attempt, {
+        status: 'retrying', retryable: true, submissionLease: null, requestStartedAtMs: null,
+        availableAtMs: budget.retryAtMs, safeErrorCode: 'PROJECT_PROVIDER_BUDGET',
+      }, nowMs);
+      continue;
+    }
     let tickets;
     try {
       tickets = await expo.sendPushNotificationsAsync(chunk);
@@ -381,18 +379,10 @@ const { acquireNotificationRetrySubmissionFence, releaseNotificationRetrySubmiss
   transitionDeliveryAttempt,
 });
 
-/** @param {{ db?: any, jobRef: any, job: any, nowMs?: number, expo?: any, leaseOwnerId?: string | null, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
-// eslint-disable-next-line complexity -- expiry, durable fanout and retention fencing share one leased state transition
-const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning, metrics = null }) => {
+/** @param {{ db?: any, jobRef: any, job: any, nowMs?: number, expo?: any, leaseOwnerId?: string | null, syncSourceStatus?: Function, publishCriticalWarning?: Function, providerClock?: () => number, metrics?: any }} options */
+const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, nowMs = Date.now(), expo = getExpoPushClient(), leaseOwnerId = null, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning, metrics = null, providerClock = Date.now }) => {
   if (job.supersededByJobId || Number(job.expiresAtMs) <= nowMs) {
-    if (!(await renewNotificationJobSubmissionFence({
-      jobRef, leaseOwnerId, nowMs, requiredStatus: 'fanout_in_progress',
-    }))) return { status: 'retention_fenced', fanoutComplete: false, replayed: true };
-    const completedAtMs = Number(job.completedAtMs || nowMs);
-    await transitionQueuedRecord(db, { targetPath: `notification_jobs/${job.jobId}`, current: job, patch: { status: 'expired', lease: null, completedAtMs, updatedAtMs: nowMs }, targetId: job.jobId });
-    const expiredJob = { ...job, status: 'expired', lease: null, completedAtMs };
-    await finalizeAndScheduleCompletedFanout(db, expiredJob, nowMs, syncSourceStatus, publishCriticalWarning);
-    return { status: 'expired', fanoutComplete: true };
+    return expireLeasedNotificationJob({ db, jobRef, job, leaseOwnerId, nowMs, syncSourceStatus, publishCriticalWarning });
   }
   const expectedCursor = job.afterRecipientId || null;
   const pageId = buildAudiencePageId(job.jobId, expectedCursor);
@@ -408,7 +398,7 @@ const processNotificationJobPage = async ({ db = admin.database(), jobRef, job, 
     error.code = 'NOTIFICATION_JOB_LEASE_LOST';
     throw error;
   }
-  await sendPreparedChunks(db, job, prepared, expo, nowMs);
+  await sendPreparedChunks(db, job, prepared, expo, nowMs, providerClock);
   const committed = await commitNotificationAudiencePage(jobRef, {
     pageId, expectedCursor, nextCursor: page.nextCursor, increments, skipReasons, audienceComparison, nowMs, leaseOwnerId,
   });
@@ -429,10 +419,10 @@ const canRecoverFailedNotificationPage = (current, leased, leaseOwnerId, nowMs) 
   && current.lastCommittedPageId === leased.lastCommittedPageId
 );
 
-/** @param {{ db?: any, jobId: string, nowMs?: number, expo?: any, queueKey?: string, queueVersion?: number, queueOwnerId?: string, queueLeaseExpiresAtMs?: number, syncSourceStatus?: Function, publishCriticalWarning?: Function }} options */
+/** @param {{ db?: any, jobId: string, nowMs?: number, expo?: any, queueKey?: string, queueVersion?: number, queueOwnerId?: string, queueLeaseExpiresAtMs?: number, syncSourceStatus?: Function, publishCriticalWarning?: Function, providerClock?: () => number, metrics?: any }} options */
 // eslint-disable-next-line complexity -- lease recovery and durable rescheduling must remain one worker transaction boundary
-const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now(), expo, queueKey, queueVersion, queueOwnerId, queueLeaseExpiresAtMs, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning }) => {
-  const jobRef = db.ref(`notification_jobs/${jobId}`);
+const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now(), expo, queueKey, queueVersion, queueOwnerId, queueLeaseExpiresAtMs, syncSourceStatus = syncNotificationSourceStatus, publishCriticalWarning = publishCriticalFanoutWarning, providerClock = Date.now }) => {
+  const jobRef = db.ref(`notification_jobs_v2/${jobId}`);
   const queueRef = queueKey ? db.ref(`${QUEUE_ROOTS.fanout}/${queueKey}`) : null;
   const before = (await jobRef.once('value')).val();
   if (isNotificationLifecycleRetentionFenced(before, nowMs)) {
@@ -444,7 +434,9 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
   if (queueKey && (!before || before.queueKey !== queueKey || Number(before.queueVersion) !== Number(queueVersion))) {
     // A failure CAS can commit before publishing its replacement queue leaf.
     // The retained old pointer is the durable continuation for this handoff.
-    if (before) await ensureNotificationFanoutQueue(db, before);
+    if (before && TERMINAL_NOTIFICATION_JOB_STATUSES.has(before.status)) {
+      await finalizeAndScheduleCompletedFanout(db, before, nowMs, syncSourceStatus, publishCriticalWarning);
+    } else if (before) await ensureNotificationFanoutQueue(db, before);
     if (queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
     return { acquired: false, status: 'stale_queue' };
   }
@@ -484,7 +476,7 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
       await releaseClaimedQueueEntry(queueRef, queueOwnerId, Number(lease.job.lease.expiresAtMs));
     } else if (queueRef && queueOwnerId && Number(lease.job?.availableAtMs || 0) > nowMs) {
       await transitionQueuedRecord(db, {
-        targetPath: `notification_jobs/${jobId}`, current: lease.job, patch: {},
+        targetPath: `notification_jobs_v2/${jobId}`, current: lease.job, patch: {},
         queueKind: 'fanout', dueAtMs: Number(lease.job.availableAtMs), targetId: jobId,
       });
     } else if (queueRef && queueOwnerId) {
@@ -493,7 +485,7 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     return { acquired: false, status: lease.job?.status || 'missing' };
   }
   try {
-    const result = await processNotificationJobPage({ db, jobRef, job: lease.job, nowMs, leaseOwnerId, syncSourceStatus, publishCriticalWarning, ...(expo ? { expo } : {}) });
+    const result = await processNotificationJobPage({ db, jobRef, job: lease.job, nowMs, leaseOwnerId, syncSourceStatus, publishCriticalWarning, providerClock, ...(expo ? { expo } : {}) });
     if (queueRef && queueOwnerId) {
       if (result.fanoutComplete) {
         await settleCompletedFanoutQueue({ jobRef, queueRef, queueKey, queueOwnerId, nowMs });
@@ -548,14 +540,14 @@ const runNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.n
     if (queueRef && queueOwnerId) await removeClaimedQueueEntry(queueRef, queueOwnerId);
     const latest = (await jobRef.once('value')).val();
     if (latest) await syncSourceStatus(db, latest, nowMs);
-    if (expired && lease.job.priorityClass === 'critical') await db.ref(`notification_delivery_warnings/${jobId}`).update({ jobId, tourId: lease.job.tourId || null, eventId: lease.job.eventId || null, severity: 'critical', code: 'EXPIRED', status: 'open', updatedAtMs: nowMs });
+    if (expired && lease.job.priorityClass === 'critical') await db.ref(`notification_delivery_warnings_v2/${jobId}`).update({ jobId, tourId: lease.job.tourId || null, eventId: lease.job.eventId || null, severity: 'critical', code: 'EXPIRED', status: 'open', updatedAtMs: nowMs });
     log.error('Notification job page failed', error, { jobId });
     return { acquired: true, status: expired ? 'expired' : 'queued' };
   }
 };
 
 const processNotificationDeliveryJob = onValueWritten({
-  ref: '/notification_job_fanout_queue/{queueKey}', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 20, timeoutSeconds: 90,
+  ref: '/notification_job_fanout_queue_v2/{queueKey}', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 20, concurrency: 1, timeoutSeconds: 90,
 }, async (event) => {
   const nowMs = Date.now();
   const entry = event.data.after.val();
@@ -572,9 +564,9 @@ const processNotificationDeliveryJob = onValueWritten({
   });
 });
 
-const recoverNotificationDeliveryJobs = onSchedule({ schedule: 'every 5 minutes', timeZone: 'Europe/London', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 1, timeoutSeconds: 90 }, async () => {
+const recoverNotificationDeliveryJobs = onSchedule({ schedule: 'every 1 minutes', timeZone: 'Europe/London', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 1, concurrency: 1, timeoutSeconds: 90 }, async () => {
   const db = admin.database(); const nowMs = Date.now();
-  const due = await loadDueQueueEntries(db, 'fanout', nowMs, 25);
+  const due = await loadFairDueQueueEntries(db, 'fanout', nowMs, 30);
   let processed = 0;
   await mapWithConcurrency(due, 5, async ([queueKey]) => {
     const claimed = await claimQueueEntry(db.ref(`${QUEUE_ROOTS.fanout}/${queueKey}`), nowMs);

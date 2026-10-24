@@ -52,6 +52,8 @@ const baseState = () => ({
   passenger_identity_security: {
     [BOOKING_REF]: {
       authorizedAuthUid: AUTH_UID,
+      deviceAuthorizationVersion: 2,
+      authorizedAuthUids: { [AUTH_UID]: true },
       passengerPrincipalId: PRINCIPAL_ID,
       passengerIdentityVersion: 'pax_v2',
       loginLocked: false,
@@ -244,7 +246,7 @@ test('an additional authorized phone reads the same trip without enumerating dev
   }
 });
 
-test('map-only authorization works while a legacy record still supports its original phone', async () => {
+test('map-only authorization works and retained legacy owner cannot bypass current device authorization', async () => {
   for (const legacyOwner of [undefined, AUTH_UID]) {
     const state = baseState();
     state.passenger_identity_security[BOOKING_REF].authorizedAuthUid = legacyOwner;
@@ -252,8 +254,8 @@ test('map-only authorization works while a legacy record still supports its orig
     state.passenger_identity_security[BOOKING_REF].authorizedAuthUids = legacyOwner
       ? { 'second-phone': true } : { [AUTH_UID]: true };
     const { res } = await runHandler({ state });
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.body.parts.booking.status, 'value');
+    assert.equal(res.statusCode, legacyOwner ? 403 : 200);
+    if (!legacyOwner) assert.equal(res.body.parts.booking.status, 'value');
   }
 });
 

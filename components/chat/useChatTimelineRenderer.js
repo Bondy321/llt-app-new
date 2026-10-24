@@ -20,6 +20,7 @@ export default function useChatTimelineRenderer(context, late) {
     renderHighlightedText,
     replyBubbleMinWidth,
     retryingMessageIds,
+    retryMessageMedia,
     rowOffsetsRef,
     setUnreadAnchorY,
     setViewingImage,
@@ -43,8 +44,8 @@ export default function useChatTimelineRenderer(context, late) {
   const renderMessageRow = useCallback(({
     item
   }) => {
-    return <MessageRow item={item} unreadAnchorMessageId={unreadAnchorMessageId} onRowLayout={handleMessageRowLayout} onSwipeReply={message => startReplyComposer(message, 'swipe')} activeSearchResultMessageId={activeSearchResultMessageId} highlightedReplyTargetMessageId={highlightedReplyTargetMessageId} currentUserId={realtimeActorId} currentUserIds={currentReactionUserIds} reactionsEnabled={!internalDriverChat} canRetry={item.type === 'message' ? canRetryFailedMessageForCurrentSession(item.data) : false} isRetrying={item.type === 'message' ? !!retryingMessageIds[item.data?.id] : false} onRetry={handleRetryFailedMessage} onLongPress={handleMessageLongPress} onReactionPress={handleReaction} onDoubleTapReaction={internalDriverChat ? null : handleHeartReactionDoubleTap} onOpenImage={setViewingImage} onJumpToMessage={jumpToMessageById} renderHighlightedText={renderHighlightedText} formatTime={formatTime} parseMessageText={parseMessageText} chatImageSize={chatImageSize} replyBubbleMinWidth={replyBubbleMinWidth} />;
-  }, [unreadAnchorMessageId, handleMessageRowLayout, activeSearchResultMessageId, highlightedReplyTargetMessageId, realtimeActorId, currentReactionUserIds, internalDriverChat, canRetryFailedMessageForCurrentSession, retryingMessageIds, handleRetryFailedMessage, handleMessageLongPress, handleReaction, handleHeartReactionDoubleTap, setViewingImage, jumpToMessageById, renderHighlightedText, formatTime, parseMessageText, chatImageSize, replyBubbleMinWidth, startReplyComposer]);
+    return <MessageRow item={item} unreadAnchorMessageId={unreadAnchorMessageId} onRowLayout={handleMessageRowLayout} onSwipeReply={message => startReplyComposer(message, 'swipe')} activeSearchResultMessageId={activeSearchResultMessageId} highlightedReplyTargetMessageId={highlightedReplyTargetMessageId} currentUserId={realtimeActorId} currentUserIds={currentReactionUserIds} reactionsEnabled={!internalDriverChat} canRetry={item.type === 'message' ? canRetryFailedMessageForCurrentSession(item.data) : false} isRetrying={item.type === 'message' ? !!retryingMessageIds[item.data?.id] : false} onRetry={handleRetryFailedMessage} onLongPress={handleMessageLongPress} onReactionPress={handleReaction} onDoubleTapReaction={internalDriverChat ? null : handleHeartReactionDoubleTap} onOpenImage={setViewingImage} onRetryMedia={retryMessageMedia} onJumpToMessage={jumpToMessageById} renderHighlightedText={renderHighlightedText} formatTime={formatTime} parseMessageText={parseMessageText} chatImageSize={chatImageSize} replyBubbleMinWidth={replyBubbleMinWidth} />;
+  }, [unreadAnchorMessageId, handleMessageRowLayout, activeSearchResultMessageId, highlightedReplyTargetMessageId, realtimeActorId, currentReactionUserIds, internalDriverChat, canRetryFailedMessageForCurrentSession, retryingMessageIds, handleRetryFailedMessage, handleMessageLongPress, handleReaction, handleHeartReactionDoubleTap, setViewingImage, retryMessageMedia, jumpToMessageById, renderHighlightedText, formatTime, parseMessageText, chatImageSize, replyBubbleMinWidth, startReplyComposer]);
   Object.assign(late.current, {
     keyExtractor,
     handleMessageRowLayout,

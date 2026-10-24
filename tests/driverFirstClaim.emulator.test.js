@@ -13,6 +13,7 @@ process.env.GCLOUD_PROJECT = projectId;
 process.env.REQUIRE_APP_CHECK_FOR_LOGIN = 'false';
 const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
+const { issueStaffEnrolment } = require('../functions/src/domains/driver-auth/staffEnrolment');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
 const { setDriverLoginPolicy, advanceDriverPolicyTransition, processDriverLoginPolicyCleanupJobs } = require('../functions/src/domains/driver-auth/driverDevicePolicyFunctions');
 const { assignDriverToTour } = require('../functions/src/domains/driver-assignment/driverAssignmentFunction');
@@ -34,14 +35,14 @@ const eventually = async predicate => {
 
 // The Auth emulator deliberately accepts unsigned JWTs and verifies that the
 // actual emulated user exists. Keep this namespace isolated from parallel files.
-const identity = async () => {
+const identity = async ({ mfa = false } = {}) => {
   const uid = `synthetic-${randomUUID()}`;
   await writer.auth().createUser({ uid });
   const now = Math.floor(Date.now() / 1000);
   const token = [ { alg: 'none', typ: 'JWT' }, {
     iss: `https://securetoken.google.com/${projectId}`, aud: projectId, sub: uid,
     user_id: uid, auth_time: now, iat: now, exp: now + 3600,
-    firebase: { identities: {}, sign_in_provider: 'anonymous' },
+    firebase: { identities: {}, sign_in_provider: mfa ? 'password' : 'anonymous', ...(mfa ? { sign_in_second_factor: 'totp' } : {}) },
   } ].map(value => Buffer.from(JSON.stringify(value)).toString('base64url')).join('.') + '.';
   return { uid, token };
 };
@@ -56,6 +57,10 @@ const idle = async () => {
   assert.fail('Real login handlers did not release their admissions');
 };
 const request = async (route, actor, body) => {
+  if (route === 'driver' && !body.enrolmentSecret) {
+    const approval = await issueStaffEnrolment({ db, driverId: body.driverId, adminUid: operator.uid });
+    body = { ...body, enrolmentSecret: approval.secret };
+  }
   const response = await fetch(`${origin}/${route}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${actor.token}` },
     body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
@@ -99,7 +104,7 @@ test.before(async () => {
   server = http.createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
-  operator = await identity();
+  operator = await identity({ mfa: true });
 });
 test.beforeEach(async () => {
   await idle();
@@ -139,6 +144,19 @@ test('normal enforcement transition clears old claims, then the first handset cl
   assert.equal(denied.body.reason, 'DRIVER_ALREADY_LINKED');
   assert.equal((await db.ref(`app_sessions/${second.uid}`).get()).exists(), false);
   assert.equal((await db.ref(`users/${second.uid}/driverId`).get()).exists(), false);
+});
+
+test('same enrolment receipt recovers the committed session through its new exact login admission', async () => {
+  const actor = await identity();
+  const approval = await issueStaffEnrolment({ db, driverId: 'D-SYNTHETIC', adminUid: operator.uid });
+  const body = { driverId: 'D-SYNTHETIC', enrolmentSecret: approval.secret };
+  const first = await request('driver', actor, body);
+  await idle();
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const retry = await request('driver', actor, body);
+  await idle();
+  assert.equal(retry.status, 200, JSON.stringify(retry.body));
+  assert.equal(retry.body.session.sessionId, first.body.session.sessionId);
 });
 
 test('two concurrent first-handset logins have exactly one winner and leave no losing authority', async () => {

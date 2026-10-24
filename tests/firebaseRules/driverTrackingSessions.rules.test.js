@@ -8,6 +8,7 @@ const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@fir
 const { reconcileDriverLocationProjection } = require('../../functions/lib/driverLocationProjection');
 const { buildAssignmentOwnedDriverLocationPickup } = require('../../functions/lib/driverLocationPickup');
 const { reconcileDriverTrackingIntentChange } = require('../../functions/src/domains/live-state/driverTrackingSessions');
+const { driverAuthorityUpdates } = require('./sessionFixtures');
 const { performDriverTrackingStop } = require('../../functions/src/domains/live-state/driverTrackingStop');
 
 const PROJECT_ID = 'demo-llt-tracking-intent';
@@ -47,17 +48,16 @@ test.beforeEach(async () => {
   nowMs = Date.now(); expiresAtMs = nowMs + 3600000;
   const records = {
     'driver_login_policy/v1': { schemaVersion: 1, enforceSingleDevice: false, generation: 0, revision: 1, updatedAtMs: nowMs },
-    [`drivers/${DRIVER}`]: { authUid: UID, currentTourId: TOUR, name: 'Synthetic driver' },
+    [`drivers/${DRIVER}/name`]: 'Synthetic driver',
     [`tours/${TOUR}`]: { name: 'Synthetic tour', driverId: DRIVER, driverAssignmentRevision: 7 },
     [`tour_manifests/${TOUR}/assigned_drivers/${DRIVER}`]: true,
   };
   for (const [uid, sid] of [[UID, SID], [OTHER_UID, OTHER_SID]]) {
-    records[`users/${uid}`] = { principalType: 'driver', driverId: DRIVER,
-      driverPrincipalId: `driver:${DRIVER}`, driverAssignedTourId: TOUR };
-    records[`app_sessions/${uid}`] = { schemaVersion: 1, sessionId: sid, authUid: uid,
-      principalId: `driver:${DRIVER}`, principalType: 'driver', driverId: DRIVER, tourId: TOUR,
-      driverLoginPolicyGeneration: 0, status: 'active', issuedAtMs: nowMs,
-      lastAuthenticatedAtMs: nowMs, expiresAtMs, sessionRevision: 1 };
+    const authority = driverAuthorityUpdates({ uid, driverId: DRIVER, tourId: TOUR, nowMs });
+    authority[`app_sessions/${uid}`].sessionId = sid;
+    authority[`app_session_authority/${uid}`].sessionId = sid;
+    authority[`driver_device_authorizations/${uid}`].sessionId = sid;
+    Object.assign(records, authority);
   }
   await trusted(async db => { await db.ref().set(null); await db.ref().update(records); });
 });
@@ -74,7 +74,7 @@ test('intent is write-only and cannot confer permission; tracked publication req
   await assertFails(db.ref(intentPath()).remove());
   await assertFails(db.ref(intentPath()).set(intent()));
   await assertFails(db.ref('driver_tracking_sessions/arbitrary').set(intent()));
-  await assertSucceeds(db.ref(locationPath('loc_legacy')).set(location({ liveSharingSessionId: 'loc_legacy' })));
+  await assertFails(db.ref(locationPath('loc_legacy')).set(location({ liveSharingSessionId: 'loc_legacy' })));
 });
 
 test('stop tombstone blocks delayed publications and reactivation while a new tracking ID remains available', async () => {
@@ -153,6 +153,20 @@ for (const [reason, update] of [
   await assertFails(db.ref(locationPath()).set(location()));
   await assertFails(client(OTHER_UID).ref(intentPath()).set({ ...active, status: 'stopped' }));
   await assertFails(db.ref(intentPath()).set({ ...active, status: 'stopped', startedAtMs: active.startedAtMs + 1 }));
+  if (['role loss', 'session replacement', 'policy change'].includes(reason)) {
+    await assertFails(db.ref(intentPath()).set({ ...active, status: 'stopped' }));
+    await assertFails(db.ref(locationPath()).remove());
+    await trusted(async admin => {
+      const denied = await performDriverTrackingStop({ db: admin, authUid: OTHER_UID, input: { ...active, status: 'stopped' } });
+      assert.equal(denied.status, 403);
+      assert.equal((await admin.ref(locationPath()).get()).exists(), true);
+      const result = await performDriverTrackingStop({ db: admin, authUid: UID, input: { ...active, status: 'stopped' } });
+      assert.equal(result.status, 200);
+      assert.equal(result.payload.withdrawalAcknowledged, true);
+      assert.equal((await admin.ref(locationPath()).get()).exists(), false);
+    });
+    return;
+  }
   await assertSucceeds(db.ref(intentPath()).set({ ...active, status: 'stopped' }));
   await assertFails(client(OTHER_UID).ref(locationPath()).remove());
   await assertSucceeds(db.ref(locationPath()).remove());

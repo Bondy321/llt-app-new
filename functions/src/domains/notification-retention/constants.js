@@ -5,8 +5,8 @@
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const NOTIFICATION_RETENTION_SCHEMA_VERSION = 1;
 
-const NOTIFICATION_RETENTION_ROOT = 'notification_retention/v1';
-const NOTIFICATION_RETENTION_ROLLOUT_ROOT = 'notification_retention_rollout/v1';
+const NOTIFICATION_RETENTION_ROOT = 'notification_retention/v2';
+const NOTIFICATION_RETENTION_ROLLOUT_ROOT = 'notification_retention_rollout/v2';
 
 const NOTIFICATION_RETENTION_PATHS = Object.freeze({
   root: NOTIFICATION_RETENTION_ROOT,

@@ -11,7 +11,7 @@ Keep only aggregate JSON: phase and revision, preparation completion, due/deferr
 page/query/update-path maxima, oldest due age, shadow mismatches, orphan counts and evidence digest.
 Never copy job, attempt, source, user, tour, booking, token or receipt identifiers into an incident.
 
-The canonical `notification_jobs/{jobId}` record is delivery authority. Its matching private
+The canonical `notification_jobs_v2/{jobId}` record is delivery authority. Its matching private
 retention job is the authoritative due-state item; the compatibility queue projection never grants
 permission to delete or deliver. Before interpreting a stalled item, verify:
 
@@ -45,7 +45,7 @@ identifiers; investigate through authorised backend logs without exposing the ra
 
 ## Immediate rollback
 
-Compare-and-set `notification_retention_rollout/v1` to `paused` with the exact observed revision,
+Compare-and-set `notification_retention_rollout/v2` to `paused` with the exact observed revision,
 `--apply`, and exact project confirmation. A backward transition is never blocked by forward evidence
 gates. The revision increment invalidates every older compactor worker before another destructive
 page, phase or auxiliary sweep. An already-started bounded page can settle; its stale worker cannot
@@ -166,7 +166,7 @@ Do not begin production preparation or a forward phase transition without a vali
 After preparation, a nonzero count of safely classified historical orphans is repair work, not an
 activation blocker. Any malformed or ambiguous orphan increments `requiresAttention` and blocks a
 forward transition. Shadow writes only bounded aggregate evidence under
-`notification_retention/v1/evidence/shadow`; the `shadow -> compactor` transaction requires passing
+`notification_retention/v2/evidence/shadow`; the `shadow -> compactor` transaction requires passing
 evidence from the exact shadow revision and matching preparation digest.
 
 ## Synchronous recovery evidence

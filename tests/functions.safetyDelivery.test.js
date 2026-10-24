@@ -114,8 +114,18 @@ test('safety reporter access distinguishes attached passengers and coherent assi
     ref: (path) => ({
       once: async () => {
         let value = null;
-        if (path.includes('/participants/')) value = participant ? true : null;
+        if (path.includes('/participants/')) value = participant ? { schemaVersion: 2,
+          userId: 'passenger-auth', sessionId: session.sessionId, principalId: session.principalId,
+          sessionExpiresAtMs: session.expiresAtMs } : null;
         else if (path.startsWith('app_sessions/')) value = session;
+        else if (path.startsWith('app_session_authority/') && session) value = {
+          schemaVersion: 1, state: 'committed', epoch: 'd'.repeat(48), sessionId: session.sessionId };
+        else if (path.startsWith('driver_staff_policy/')) value = { schemaVersion: 1, generation: 'c'.repeat(48) };
+        else if (path.startsWith('driver_device_authorizations/') && session) value = {
+          schemaVersion: 1, state: 'active', generation: 'c'.repeat(48), driverId: session.driverId, sessionId: session.sessionId };
+        else if (path === 'bookings/BOOKING') value = { tourId: 'TOUR_1' };
+        else if (path === 'passenger_identity_security/BOOKING') value = {
+          deviceAuthorizationVersion: 2, authorizedAuthUids: { 'passenger-auth': true }, passengerPrincipalId: session.principalId };
         else if (path === 'driver_login_policy/v1') value = policy;
         else if (path.startsWith('users/')) value = user;
         else if (path.startsWith('tour_manifests/') && path.includes('/assigned_drivers/')) {
@@ -129,12 +139,16 @@ test('safety reporter access distinguishes attached passengers and coherent assi
   });
 
   const passenger = await __testables.resolveSafetyReporterAccess({
-    db: makeDb({ participant: true, user: { stablePassengerId: 'pax_v1:one' } }),
+    db: makeDb({ participant: true, user: { stablePassengerId: 'pax_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      identityVersion: 'pax_v2', principalType: 'passenger', bookingRef: 'BOOKING' },
+      session: { schemaVersion: 1, sessionId: `sess_v1_${'b'.repeat(32)}`, authUid: 'passenger-auth',
+        principalId: 'pax_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', principalType: 'passenger', tourId: 'TOUR_1', status: 'active',
+        issuedAtMs: 1, lastAuthenticatedAtMs: 1, expiresAtMs: 4_000_000_000_000, sessionRevision: 1 } }),
     authUid: 'passenger-auth',
     tourId: 'TOUR_1',
     requestedRole: 'passenger',
   });
-  assert.deepEqual(passenger, { allowed: true, role: 'passenger', principalId: 'pax_v1:one' });
+  assert.deepEqual(passenger, { allowed: true, role: 'passenger', principalId: 'pax_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
 
   const assignedDriver = await __testables.resolveSafetyReporterAccess({
     db: makeDb({

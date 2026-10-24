@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
-import { auth } from '../firebase';
+import { auth, getCurrentAppCheckToken } from '../firebase';
+import { withTrackingTimeout } from './driver-tracking/withTrackingTimeout';
 
 const buildEndpoint = () => {
   const explicit = process.env.EXPO_PUBLIC_DRIVER_LOCATION_PICKUP_URL?.trim();
@@ -27,15 +28,24 @@ export const mutateDriverLocationPickup = async ({
   fetchFn = (...args) => fetch(...args),
   authInstance = auth,
   endpoint = buildEndpoint(),
-  clientVersion = Constants?.expoConfig?.version || '1.0.5',
+  clientVersion = Constants?.expoConfig?.version || '',
+  getAppCheckToken = getCurrentAppCheckToken,
+  timeoutMs = 15000,
 } = {}) => {
   const currentUser = authInstance?.currentUser;
   if (!endpoint) throw new Error('The pickup location service is not configured. Update the app or contact dispatch.');
   if (!currentUser?.getIdToken || !sessionScope?.sessionId) throw new Error('An active driver session is required. Sign in again.');
+  const controller = new AbortController();
+  const perform = async () => {
   const token = await currentUser.getIdToken();
+  const appCheck = await getAppCheckToken();
+  if (controller.signal.aborted) throw new Error('Pickup request timed out. Retry to confirm the current location.');
+  if (authInstance.currentUser !== currentUser) throw new Error('Your driver account changed. Retry from the current session.');
   const response = await fetchFn(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
+      ...(appCheck ? { 'X-Firebase-AppCheck': appCheck } : {}) },
+    signal: controller.signal,
     body: JSON.stringify({
       operation,
       tourId,
@@ -51,6 +61,9 @@ export const mutateDriverLocationPickup = async ({
     throw error;
   }
   return payload;
+  };
+  try { return await withTrackingTimeout(perform, timeoutMs); }
+  finally { controller.abort(); }
 };
 
 export default mutateDriverLocationPickup;

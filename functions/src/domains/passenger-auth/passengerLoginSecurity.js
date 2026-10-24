@@ -46,18 +46,7 @@ const checkPassengerLoginRateLimits = async ({
   return { allowed: true, authDimension, networkDimension };
 };
 
-/** @param {any} req */
-const getTrustedRequestNetworkKey = (req) => {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  const chain = (Array.isArray(forwardedFor) ? forwardedFor : [forwardedFor])
-    .flatMap((value) => typeof value === 'string' ? value.split(',') : [])
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const platformAddress = chain.length >= 2
-    ? chain[chain.length - 2]
-    : chain[0] || req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
-  return String(platformAddress).trim().slice(0, 128) || 'unknown';
-};
+const { getTrustedRequestNetworkKey } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
 
 module.exports = {
   checkPassengerLoginRateLimits,

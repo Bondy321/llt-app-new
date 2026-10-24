@@ -28,14 +28,14 @@ const { hashPushToken } = require('../functions/src/domains/notifications/notifi
 const { NOTIFICATION_TYPES } = require('../functions/src/domains/notifications/notificationDeliveryPolicy');
 const writer = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'cold-workers-writer');
 const db = writer.database();
-const NOW = 1_800_000_000_000;
+const NOW = Date.now();
 let counter = 0;
 // Genuine Admin SDK connection and transaction protocol. A one-off bounded query
 // is deliberately not kept subscribed; it does not retain the worker's cache.
 const cold = async operation => {
   const app = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), `cold-workers-${++counter}`);
   const observations = new Map();
-  const database = { ref(path = '') {
+  const database = { app, ref(path = '') {
     const ref = path ? app.database().ref(path) : app.database().ref();
     const transact = ref.transaction.bind(ref);
     ref.transaction = (update, ...args) => transact(current => {
@@ -117,7 +117,7 @@ test('cold driver authority removal counts only the expected owner and preserves
 });
 
 test('cold missing/future/foreign-owned jobs are never acquired and concurrent workers have one winner', async () => {
-  const path = 'notification_jobs/synthetic';
+  const path = 'notification_jobs_v2/synthetic';
   for (const source of [null,
     { jobId: 'synthetic', status: 'queued', expiresAtMs: NOW + 100_000, availableAtMs: NOW + 1000 },
     { jobId: 'synthetic', status: 'queued', expiresAtMs: NOW + 100_000, lease: { ownerId: 'other', expiresAtMs: NOW + 1000 } }]) {
@@ -169,9 +169,14 @@ const notificationFixture = async () => {
   const uid = 'synthetic-notification'; const token = 'ExponentPushToken[synthetic-cold-worker]';
   const session = buildPassengerSessionRecord({ authUid: uid, principalId: `pax_v2_${'b'.repeat(32)}`, tourId: 'SYNTHETIC_TOUR', sessionId: `sess_v1_${'a'.repeat(32)}`, nowMs: NOW - 100, expiresAtMs: NOW + 86_400_000 });
   await db.ref().update({ [`app_sessions/${uid}`]: session,
+    [`app_session_authority/${uid}`]: { schemaVersion: 1, state: 'committed', sessionId: session.sessionId, epoch: 'a'.repeat(48) },
     [`tours/SYNTHETIC_TOUR/participants/${uid}`]: { schemaVersion: 2, sessionId: session.sessionId,
-      principalId: session.principalId, sessionExpiresAtMs: session.expiresAtMs },
-    [`users/${uid}`]: { principalType: 'passenger', tourId: 'SYNTHETIC_TOUR', stablePassengerId: session.principalId },
+      userId: uid, principalId: session.principalId, sessionExpiresAtMs: session.expiresAtMs },
+    [`users/${uid}`]: { principalType: 'passenger', tourId: 'SYNTHETIC_TOUR', stablePassengerId: session.principalId,
+      identityVersion: 'pax_v2', bookingRef: 'SYNTHETIC-COLD' },
+    'bookings/SYNTHETIC-COLD': { tourId: 'SYNTHETIC_TOUR' },
+    'passenger_identity_security/SYNTHETIC-COLD': { deviceAuthorizationVersion: 2,
+      passengerPrincipalId: session.principalId, authorizedAuthUids: { [uid]: true } },
     [`notification_devices/${uid}`]: { pushToken: token, tokenHash: hashPushToken(token), status: 'active', permissionState: 'granted', platform: 'ios', operationalEligible: true, operationalTourId: session.tourId, operationalSessionId: session.sessionId, operationalSessionRevision: session.sessionRevision, registrationRevision: 1 },
     'notification_migrations/device_registry_v1': { legacyFallbackEnabled: false } });
   const job = jobs.createNotificationJobRecord({ notificationType: NOTIFICATION_TYPES.GROUP_CHAT,
@@ -201,7 +206,7 @@ test('cold fanout, transient-ticket retry and receipts complete exactly once acr
   await cold(database => receipts.retryDueNotificationAttempts({ db: database, nowMs: NOW + 1_000_001, expo }));
   await cold(database => receipts.processDueNotificationReceipts({ db: database, nowMs: NOW + 1_000_001, expo }));
   assert.equal(sends, 2, 'duplicate workers cannot resubmit completed attempts');
-  assert.equal((await value(`notification_jobs/${job.jobId}`)).status, 'provider_accepted');
+  assert.equal((await value(`notification_jobs_v2/${job.jobId}`)).status, 'provider_accepted');
 });
 
 test('cold audience preview and manual retry complete their continuation without duplicate attempts', async () => {
@@ -209,12 +214,12 @@ test('cold audience preview and manual retry complete their continuation without
   const terminal = { ...job, status: 'provider_rejected', completedAtMs: NOW - 100,
     fanoutCompletedAtMs: NOW - 100, queueKey: null, queueKind: null, lease: null };
   const attemptId = 'synthetic-old-attempt';
-  await db.ref().update({ [`notification_jobs/${job.jobId}`]: terminal,
-    [`notification_job_recipients/${job.jobId}/${uid}`]: { generation: 1, attemptId },
-    [`notification_delivery_attempts/${attemptId}`]: { attemptId, jobId: job.jobId, generation: 1,
+  await db.ref().update({ [`notification_jobs_v2/${job.jobId}`]: terminal,
+    [`notification_job_recipients_v2/${job.jobId}/${uid}`]: { generation: 1, attemptId },
+    [`notification_delivery_attempts_v2/${attemptId}`]: { attemptId, jobId: job.jobId, generation: 1,
       recipientUid: uid, installationUid: uid, tokenHash: hashPushToken('ExponentPushToken[synthetic-cold-worker]'),
       status: 'provider_rejected', ticketStatus: 'ticket_accepted', receiptStatus: 'provider_rejected' },
-    'notification_audience_previews/synthetic': { ownerAuthUid: 'synthetic-admin', job, status: 'processing',
+    'notification_audience_previews_v2/synthetic': { ownerAuthUid: 'synthetic-admin', job, status: 'processing',
       expiresAtMs: NOW + 60_000, pages: 0, audience: 0, eligible: 0, skipped: 0 } });
   await cold(async database => {
     const result = await notificationAdmin.processAudiencePreviewChunk(database, 'synthetic', 'synthetic-admin', NOW);
@@ -224,12 +229,12 @@ test('cold audience preview and manual retry complete their continuation without
     const result = await notificationAdmin.requeueFailedNotificationJob({ db: database, jobId: job.jobId, nowMs: NOW });
     assert.equal(result.success, true); assert.equal(result.complete, true); assert.equal(result.requeued, 1);
   });
-  const attempts = await value('notification_delivery_attempts');
+  const attempts = await value('notification_delivery_attempts_v2');
   await cold(async database => {
     const result = await notificationAdmin.requeueFailedNotificationJob({ db: database, jobId: job.jobId, nowMs: NOW + 1 });
     assert.equal(result.complete, true); assert.equal(result.requeued, 1);
   });
-  assert.deepEqual(await value('notification_delivery_attempts'), attempts);
+  assert.deepEqual(await value('notification_delivery_attempts_v2'), attempts);
 });
 
 const enqueueEmptyJob = async sourceId => {
@@ -237,7 +242,7 @@ const enqueueEmptyJob = async sourceId => {
     sourceType: 'synthetic', sourceId, audienceType: 'tour', tourId: 'SYNTHETIC_TOUR',
     presentation: { title: 'Synthetic', body: 'Synthetic' }, navigation: {}, nowMs: NOW });
   await jobs.enqueueNotificationJob({ db, job });
-  return value(`notification_jobs/${job.jobId}`);
+  return value(`notification_jobs_v2/${job.jobId}`);
 };
 
 test('a failed old fanout worker cannot requeue or expire a successor lease', async () => {
@@ -247,12 +252,12 @@ test('a failed old fanout worker cannot requeue or expire a successor lease', as
       const originalRef = database.ref.bind(database);
       database.ref = (path = '') => {
         const ref = originalRef(path);
-        if (path === 'notification_migrations/device_registry_v1') ref.once = async () => {
-          successor = { ...(await value(`notification_jobs/${job.jobId}`)),
+        if (path === 'notification_devices') ref.orderByChild = () => ({ startAt: () => ({ endAt: () => ({ limitToFirst: () => ({ once: async () => {
+          successor = { ...(await value(`notification_jobs_v2/${job.jobId}`)),
             lease: { ownerId: 'synthetic-successor', acquiredAtMs: NOW, expiresAtMs: NOW + 120_000 } };
-          await db.ref(`notification_jobs/${job.jobId}`).set(successor);
+          await db.ref(`notification_jobs_v2/${job.jobId}`).set(successor);
           throw new Error('Synthetic worker dependency failure after lease replacement');
-        };
+        } }) }) }) });
         return ref;
       };
       const claim = useQueue ? await queues.claimQueueEntry(database.ref(`${queues.QUEUE_ROOTS.fanout}/${job.queueKey}`), NOW) : null;
@@ -262,7 +267,7 @@ test('a failed old fanout worker cannot requeue or expire a successor lease', as
         expo: { chunkPushNotifications: () => [] } });
       assert.equal(result.status, 'lease_lost');
     });
-    assert.deepEqual(await value(`notification_jobs/${job.jobId}`), successor);
+    assert.deepEqual(await value(`notification_jobs_v2/${job.jobId}`), successor);
   }
 });
 
@@ -273,7 +278,7 @@ test('cold retry pointer handoff survives a crash after the job CAS and before q
     const originalRef = database.ref.bind(database);
     database.ref = (path = '') => {
       const ref = originalRef(path);
-      if (path === 'notification_migrations/device_registry_v1') ref.once = async () => { throw new Error('Synthetic pre-provider worker failure'); };
+      if (path === 'notification_devices') ref.orderByChild = () => ({ startAt: () => ({ endAt: () => ({ limitToFirst: () => ({ once: async () => { throw new Error('Synthetic pre-provider worker failure'); } }) }) }) });
       if (path.startsWith(`${queues.QUEUE_ROOTS.fanout}/`) && path !== oldPath) {
         ref.transaction = async () => { throw new Error('Synthetic queue publication crash'); };
       }
@@ -284,7 +289,7 @@ test('cold retry pointer handoff survives a crash after the job CAS and before q
       queueKey: job.queueKey, queueVersion: job.queueVersion, queueOwnerId: claim.ownerId,
       queueLeaseExpiresAtMs: claim.entry.lease.expiresAtMs, expo: { chunkPushNotifications: () => [] } }), /Synthetic queue publication crash/u);
   });
-  const pending = await value(`notification_jobs/${job.jobId}`);
+  const pending = await value(`notification_jobs_v2/${job.jobId}`);
   assert.equal(pending.status, 'queued'); assert.notEqual(pending.queueKey, job.queueKey);
   assert.ok(await value(oldPath), 'old pointer remains a durable crash-recovery continuation');
   await cold(async database => {
@@ -296,7 +301,7 @@ test('cold retry pointer handoff survives a crash after the job CAS and before q
   });
   assert.equal(await value(oldPath), null);
   assert.ok(await value(`${queues.QUEUE_ROOTS.fanout}/${pending.queueKey}`));
-  assert.deepEqual(await value(`notification_jobs/${job.jobId}`), pending);
+  assert.deepEqual(await value(`notification_jobs_v2/${job.jobId}`), pending);
 });
 
 test('cold deletion completes all phases while preserving roster, siblings and permanent fences', async () => {
@@ -305,6 +310,7 @@ test('cold deletion completes all phases while preserving roster, siblings and p
   const receipt = `delrec_v1_${'e'.repeat(64)}`; const id = deriveAccountDeletionId(receipt);
   const session = buildPassengerSessionRecord({ authUid: uid, principalId: principal, tourId: tour, sessionId, nowMs: NOW - 100, expiresAtMs: NOW + 86_400_000 });
   await db.ref().update({ [`app_sessions/${uid}`]: session,
+    [`app_session_authority/${uid}`]: { schemaVersion: 1, state: 'committed', sessionId: session.sessionId, epoch: 'a'.repeat(48) },
     [`app_sessions/${sibling}`]: { ...session, authUid: sibling, sessionId: `sess_v1_${'f'.repeat(32)}` },
     [`users/${uid}`]: { principalType: 'passenger', bookingRef: booking, stablePassengerId: principal, stablePassengerKey: principal, privatePhotoOwnerKey: principal },
     [`passenger_identity_security/${booking}`]: { deviceAuthorizationVersion: 2, authorizedAuthUids: { [uid]: true, [sibling]: true }, passengerPrincipalId: principal },
@@ -351,7 +357,7 @@ test('cold deletion completes all phases while preserving roster, siblings and p
   assert.equal((await value(`tour_manifests/${tour}/bookings/${booking}`)).passengerCount, 2);
   assert.equal((await value(`chats/${tour}/messages/synthetic-other`)).text, 'preserve');
   assert.equal((await value(`chats/${tour}/messages/synthetic-owned`)).deleted, true);
-  const privacyJob = await value(`notification_jobs/${jobs.buildNotificationJobId('group_chat_message', `${tour}:synthetic-owned`)}`);
+  const privacyJob = await value(`notification_jobs_v2/${jobs.buildNotificationJobId('group_chat_message', `${tour}:synthetic-owned`)}`);
   assert.equal(privacyJob.status, 'privacy_deleted');
   assert.equal(privacyJob.presentation, undefined); assert.equal(privacyJob.navigation, undefined);
   assert.equal(privacyJob.senderPrincipalId, undefined);

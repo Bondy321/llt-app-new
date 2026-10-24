@@ -388,7 +388,7 @@ test('foreground before expiry replaces its timer without duplicate expiry callb
 test('central local cleanup stops replay and reports any durable purge failure', async () => {
   const calls = [];
   const service = createLocalSessionCleanupService({
-    storage: { multiRemove: async () => { calls.push('storage'); }, removeItem: async () => {} },
+    storage: { ...memoryStorage(), multiRemove: async () => { calls.push('storage'); } },
     offline: {
       setActiveSessionScope: () => { calls.push('stop'); },
       purgeTourPack: async () => ({ success: true }),
@@ -399,7 +399,7 @@ test('central local cleanup stops replay and reports any durable purge failure',
     photoCache: { clearPhotoViewerCache: async () => ({ success: true }) },
   });
   const result = await service.cleanup({
-    authUid: 'uid-a', appSession: SESSION, bookingData: { id: 'BOOK-1' }, tourData: { id: 'TOUR_A' },
+    authUid: 'uid-a', appSession: SESSION, bookingData: { id: 'BOOK-1' }, tourData: { id: 'TOUR_A' }, discardQueuedActions: true,
   });
   assert.equal(calls[0], 'stop');
   assert.equal(result.success, false);

@@ -4,15 +4,15 @@ const LIVE_STATE_ROLLOUT_PATH = 'live_state_rollout/v1';
 const LIVE_STATE_ROLLOUT_SCHEMA_VERSION = 1;
 const LIVE_STATE_COMPATIBILITY_PHASE = 'compatibility';
 const LIVE_STATE_CUTOVER_PHASE = 'cutover';
-const LIVE_STATE_MINIMUM_SUPPORTED_VERSION = '1.0.5';
-const LIVE_STATE_PHASES = new Set([LIVE_STATE_COMPATIBILITY_PHASE, LIVE_STATE_CUTOVER_PHASE]);
+const LIVE_STATE_MINIMUM_SUPPORTED_VERSION = '1.1.0';
+const LIVE_STATE_PHASES = new Set([LIVE_STATE_CUTOVER_PHASE]);
 const LIVE_STATE_ROLLOUT_KEYS = Object.freeze(['phase', 'projectionRevision', 'schemaVersion', 'updatedAtMs']);
 
 const defaultLiveStateRollout = () => ({
   schemaVersion: LIVE_STATE_ROLLOUT_SCHEMA_VERSION,
-  phase: LIVE_STATE_COMPATIBILITY_PHASE,
-  projectionRevision: 0,
-  updatedAtMs: null,
+  phase: LIVE_STATE_CUTOVER_PHASE,
+  projectionRevision: 1,
+  updatedAtMs: 1,
 });
 
 const normalizeLiveStateRollout = (value) => {
@@ -77,7 +77,7 @@ const compareVersions = (left, right) => {
 
 const isLiveStateClientSupported = ({ rollout, clientVersion }) => {
   const normalized = normalizeLiveStateRollout(rollout);
-  if (!normalized.valid || normalized.rollout.phase !== LIVE_STATE_CUTOVER_PHASE) return true;
+  if (!normalized.valid) return false;
   const comparison = compareVersions(clientVersion, LIVE_STATE_MINIMUM_SUPPORTED_VERSION);
   return comparison !== null && comparison >= 0;
 };

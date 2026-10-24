@@ -76,10 +76,10 @@ export const createNotificationRegistrationCoordinator = ({
         tokenError.code = 'TOKEN_FETCH_FAILED';
         throw tokenError;
       }
-      const operationalEligible = snapshot.operationalEligible === true
-        && typeof snapshot.sessionId === 'string'
+      const signedIn = typeof snapshot.sessionId === 'string'
         && Number.isSafeInteger(snapshot.sessionRevision)
-        && snapshot.sessionRevision > 0
+        && snapshot.sessionRevision > 0;
+      const operationalEligible = signedIn && snapshot.operationalEligible === true
         && typeof snapshot.tourId === 'string';
       const registrationRevision = await allocateRevision({ authUid: snapshot.authUid, now });
       if (!active || callGeneration !== generation || snapshot !== state) return { skipped: true, reason: 'stale' };
@@ -90,7 +90,7 @@ export const createNotificationRegistrationCoordinator = ({
         ...(snapshot.marketingPreferences ? { marketingPreferences: snapshot.marketingPreferences } : {}),
         operationalEligible,
         tourId: snapshot.tourId || null,
-        ...(operationalEligible ? {
+        ...(signedIn ? {
           appSessionId: snapshot.sessionId,
           appSessionRevision: snapshot.sessionRevision,
         } : {}),

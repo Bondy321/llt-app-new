@@ -13,25 +13,49 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TZ: Europe/London
+
 jobs:
   architecture-contracts:
     name: Architecture & contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       LLT_RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       LLT_RELEASE_HEAD_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-            web-admin/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -52,13 +76,40 @@ jobs:
 
   mobile-tests:
     name: Mobile tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -68,16 +119,40 @@ jobs:
 
   functions-tests:
     name: Functions tests (Node 22)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 22.23.4 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '22.23.4'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -85,29 +160,55 @@ jobs:
       - run: npm ci
       - run: npm --prefix functions ci
       - run: npm run test:functions:scripts
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+      - name: Select and verify runner Java 21 without JavaScript actions
+        uses: ./.github/actions/runner-java21
+
       - run: npm run test:login:emulators
+      - run: npm run test:deletion:emulators
 
   firebase-rules:
     name: Firebase rules
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+      - name: Select and verify runner Java 21 without JavaScript actions
+        uses: ./.github/actions/runner-java21
+
       - run: npm ci
       - run: npm --prefix functions ci
       - run: npm --prefix web-admin ci
@@ -115,16 +216,40 @@ jobs:
 
   web-administration:
     name: Web administration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            web-admin/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -132,22 +257,45 @@ jobs:
       - run: npm ci
       - run: npm --prefix web-admin ci
       - run: npm run test:web-admin
-      - run: npm run build:web-admin
+      - run: npm --prefix web-admin run build -- --mode verification
       - run: npm --prefix web-admin run lint
 
   security-audit:
     name: Security audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-            web-admin/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js

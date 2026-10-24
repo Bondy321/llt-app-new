@@ -88,7 +88,7 @@ const callQuery = (query, method, args) => typeof query?.[method] === 'function'
   : query;
 
 const loadOrdinaryPage = async ({ db, nowMs, pageSize, cursor }) => {
-  let query = db.ref('notification_jobs').orderByChild('completedAtMs');
+  let query = db.ref('notification_jobs_v2').orderByChild('completedAtMs');
   query = cursor.key
     ? callQuery(query, 'startAfter', [cursor.value, cursor.key])
     : callQuery(query, 'startAt', [1]);
@@ -111,7 +111,7 @@ const loadOrdinaryPage = async ({ db, nowMs, pageSize, cursor }) => {
 };
 
 const loadPrivacyPage = async ({ db, pageSize, cursor }) => {
-  let query = db.ref('notification_jobs').orderByChild('status');
+  let query = db.ref('notification_jobs_v2').orderByChild('status');
   if (cursor.key) {
     query = callQuery(query, 'startAfter', ['privacy_deleted', cursor.key]);
     query = query.endAt('privacy_deleted');
@@ -150,7 +150,7 @@ const loadPreparationPage = async ({ db, nowMs, pageSize, cursor }) => {
 };
 
 const loadOrphanDiscoveryPage = async ({ db, nowMs, pageSize, cursor }) => {
-  let query = db.ref('notification_delivery_attempts').orderByChild('retentionDueAtMs');
+  let query = db.ref('notification_delivery_attempts_v2').orderByChild('retentionDueAtMs');
   query = cursor?.key
     ? callQuery(query, 'startAfter', [cursor.value, cursor.key])
     : callQuery(query, 'startAt', [1]);
@@ -169,7 +169,7 @@ const loadOrphanDiscoveryPage = async ({ db, nowMs, pageSize, cursor }) => {
       malformed += 1;
       continue;
     }
-    const parent = (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val();
+    const parent = (await db.ref(`notification_jobs_v2/${attempt.jobId}`).once('value')).val();
     if (!parent) found += 1;
   }
   const last = selected.at(-1);
@@ -207,7 +207,7 @@ const materializeOrdinaryBoundary = async ({ db, jobId, observed }) => {
   const retentionDueAtMs = observed.completedAtMs + RETENTION_MS;
   let changed = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (current) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (current) => {
     if (!current || current.jobId !== jobId || current.status !== observed.status
       || current.completedAtMs !== observed.completedAtMs) return undefined;
     if (Number.isSafeInteger(current.retentionDueAtMs) && current.retentionDueAtMs > 0) {
@@ -295,7 +295,7 @@ const validFirebaseKey = (value) => typeof value === 'string' && value.length > 
   && value.length <= 768 && !INVALID_FIREBASE_KEY.test(value);
 
 const loadAttemptMigrationPage = async ({ db, pageSize, cursor, scanEndAtMs }) => {
-  let query = db.ref('notification_delivery_attempts').orderByChild('updatedAtMs');
+  let query = db.ref('notification_delivery_attempts_v2').orderByChild('updatedAtMs');
   query = cursor?.key
     ? callQuery(query, 'startAfter', [cursor.value, cursor.key])
     : query;
@@ -371,7 +371,7 @@ const materializeAttemptBoundary = async ({ db, attemptId, observed }) => {
   const retentionDueAtMs = observed.updatedAtMs + RETENTION_MS;
   let changed = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
+    db.ref(`notification_delivery_attempts_v2/${attemptId}`), (current) => {
     if (!current || ![1, 2].includes(current.schemaVersion)
       || current.attemptId !== attemptId || current.jobId !== observed.jobId
       || current.status !== observed.status || current.createdAtMs !== observed.createdAtMs

@@ -23,6 +23,11 @@ vi.mock('./adminActionService', () => ({
   postAdminAction: postAdminActionMock,
 }));
 
+const dateIndexes = (values = {}) => {
+  const parse = value => { const [d, m, y] = (value || '').split('/').map(Number); return y ? Date.UTC(y, m - 1, d) : undefined; };
+  return Object.fromEntries([['startDateEpochMs', parse(values.startDate)], ['endDateEpochMs', parse(values.endDate)]].filter(([, value]) => value !== undefined));
+};
+
 const buildSnapshot = (value) => ({
   exists: () => value !== null && value !== undefined,
   val: () => value,
@@ -88,28 +93,18 @@ describe('tour identity invariants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     updateMock.mockResolvedValue(undefined);
+    postAdminActionMock.mockImplementation(async (_name, { values }) => ({ success: true, tour: { ...values, ...dateIndexes(values) } }));
     runTransactionMock.mockImplementation(async (_target, updater) => ({
       committed: updater(null) !== undefined,
     }));
   });
 
   it('refuses to create a tour when the generated Firebase key already exists', async () => {
-    runTransactionMock.mockImplementation(async (_target, updater) => ({
-      committed: updater({ name: 'Existing Highlands' }) !== undefined,
-    }));
-
+    postAdminActionMock.mockRejectedValueOnce(Object.assign(new Error('This tour code already exists.'), { code: 'TOUR_EXISTS' }));
     const { createTour } = await import('./tourService.js');
-
-    await expect(createTour({
-      name: 'New Highlands',
-      tourCode: '5112D 8',
-    })).rejects.toThrow(/already exists at tours\/5112D_8/);
-
-    expect(runTransactionMock).toHaveBeenCalledWith(
-      { path: 'tours/5112D_8' },
-      expect.any(Function),
-      { applyLocally: false },
-    );
+    await expect(createTour({ name: 'New Highlands', tourCode: '5112D 8' })).rejects.toMatchObject({ code: 'TOUR_EXISTS' });
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', expect.objectContaining({ tourId: '5112D_8', mode: 'create' }), expect.any(Object));
+    expect(runTransactionMock).not.toHaveBeenCalled();
   });
 
   it('creates new tours at the generated key and stores a trimmed display code', async () => {
@@ -128,19 +123,17 @@ describe('tour identity invariants', () => {
 
     expect(result.id).toBe('5112D_8');
     expect(result.tour.tourCode).toBe('5112D 8');
-    expect(runTransactionMock).toHaveBeenCalledWith(
-      { path: 'tours/5112D_8' },
-      expect.any(Function),
-      { applyLocally: false },
-    );
-    const updater = runTransactionMock.mock.calls[0][1];
-    expect(updater(null)).toEqual(expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }));
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', expect.objectContaining({
+      tourId: '5112D_8', mode: 'create', values: expect.objectContaining({ name: 'Highlands', tourCode: '5112D 8' }),
+    }), expect.any(Object));
+    const sentValues = postAdminActionMock.mock.calls[0][1].values;
+    expect(runTransactionMock).not.toHaveBeenCalled();
     for (const reservedField of ['driverName', 'driverPhone', 'driverId', 'driverAssignmentRevision', 'driverLocationProjectionRevision', 'driverLocationProjectionEpoch',
       'sourceLifecycle', 'sourceLifecycle/managedDisable', 'rosterSync', 'itinerarySource', 'manualPassengerCount']) {
       expect(result.tour).not.toHaveProperty(reservedField);
-      expect(updater(null)).not.toHaveProperty(reservedField);
+      expect(sentValues).not.toHaveProperty(reservedField);
     }
-    expect(updater({ name: 'Existing' })).toBeUndefined();
+
   });
 
   it('rejects tourCode changes on existing tours', async () => {
@@ -165,13 +158,27 @@ describe('tour identity invariants', () => {
       tourCode: ' 5112d   8 ',
     });
 
-    expect(updateMock).toHaveBeenCalledWith(
-      { path: 'tours/5112D_8' },
-      {
-        name: 'Highlands Updated',
-        tourCode: '5112D 8',
-      },
-    );
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', {
+      tourId: '5112D_8', mode: 'update', expectedRevision: null,
+      values: { name: 'Highlands Updated', tourCode: '5112D 8' },
+    }, expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the editor revision even if the latest read has a newer revision and surfaces server conflicts', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: 'REV 1', adminMutationRevision: 'latest' }));
+    postAdminActionMock.mockRejectedValueOnce(Object.assign(new Error('Refresh before trying again'), { code: 'TOUR_CHANGED' }));
+    const { updateTour } = await import('./tourService.js');
+    await expect(updateTour('REV_1', { name: 'Stale edit' }, { expectedRevision: 'editor-revision' })).rejects.toMatchObject({ code: 'TOUR_CHANGED' });
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', { tourId: 'REV_1', mode: 'update', values: { name: 'Stale edit' }, expectedRevision: 'editor-revision' }, expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the current revision when no editor snapshot is supplied', async () => {
+    getMock.mockResolvedValue(buildSnapshot({ tourCode: 'REV 2', adminMutationRevision: 'current' }));
+    const { updateTour } = await import('./tourService.js');
+    await updateTour('REV_2', { name: 'Edit' });
+    expect(postAdminActionMock.mock.calls[0][1].expectedRevision).toBe('current');
   });
 
   it('generates the next available copy code when duplicating a tour', async () => {
@@ -201,11 +208,8 @@ describe('tour identity invariants', () => {
     expect(result.tour).not.toHaveProperty('driverPhone');
     expect(result.tour).not.toHaveProperty('driverId');
     expect(result.tour).not.toHaveProperty('driverAssignmentRevision');
-    expect(runTransactionMock).toHaveBeenCalledWith(
-      { path: 'tours/TA_1_COPY_2' },
-      expect.any(Function),
-      { applyLocally: false },
-    );
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', expect.objectContaining({ tourId: 'TA_1_COPY_2', mode: 'create' }), expect.any(Object));
+    expect(runTransactionMock).not.toHaveBeenCalled();
   });
 
   it('writes canonical UTC date indexes used by bounded admin queries', async () => {
@@ -285,9 +289,8 @@ describe('tour identity invariants', () => {
       sourceLifecycle:{schemaVersion:1,status:'cancelled',managedDisable:true}}));
     const {updateTour}=await import('./tourService.js');
     await updateTour('LIFE_1',{isActive:false});
-    expect(updateMock).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({
-      isActive:false,'sourceLifecycle/managedDisable':false,
-    }));
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', { tourId: 'LIFE_1', mode: 'update', values: { isActive: false }, expectedRevision: null }, expect.any(Object));
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
   it('does not let an edit lower capacity below the trusted booked count', async () => {
@@ -493,6 +496,7 @@ describe('server-owned driver assignment mutations', () => {
 describe('createTourFromTemplate date anchoring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    postAdminActionMock.mockImplementation(async (_name, { values }) => ({ success: true, tour: values }));
     runTransactionMock.mockImplementation(async (_target, updater) => ({
       committed: updater(null) !== undefined,
     }));
@@ -507,6 +511,7 @@ describe('createTourFromTemplate date anchoring', () => {
 
     expect(result.tour.startDate).toBe('10/02/2026');
     expect(result.tour.endDate).toBe('11/02/2026');
-    expect(runTransactionMock).toHaveBeenCalledTimes(1);
+    expect(postAdminActionMock).toHaveBeenCalledWith('mutateTour', expect.objectContaining({ mode: 'create', tourId: 'HL_TEST_1' }), expect.any(Object));
+    expect(runTransactionMock).not.toHaveBeenCalled();
   });
 });

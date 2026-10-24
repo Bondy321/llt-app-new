@@ -67,30 +67,27 @@ test('distributed limiter rejects raw or path-unsafe bucket keys', async () => {
   await assert.rejects(() => limiter('network/203.0.113.1', 1, 60000), /opaque key/);
 });
 
-test('production App Check supports explicit enabled or disabled modes and rejects missing configuration', () => {
+test('production App Check is required with enabled, missing or obsolete disabled configuration', () => {
   assert.equal(__testables.shouldRequireLoginAppCheck({ NODE_ENV: 'test' }), false);
   assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin',
     REQUIRE_APP_CHECK_FOR_LOGIN: 'true',
   }), true);
-  assert.throws(
-    () => __testables.shouldRequireLoginAppCheck({ K_SERVICE: 'verifypassengerlogin' }),
-    (error) => error.code === 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED',
-  );
+  assert.equal(__testables.shouldRequireLoginAppCheck({ K_SERVICE: 'verifypassengerlogin' }), true);
   assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin',
     REQUIRE_APP_CHECK_FOR_LOGIN: 'false',
-  }), false);
+  }), true);
 });
 
-test('explicit production disable dominates test markers while missing production configuration fails closed', () => {
+test('serving-runtime attestation cannot be bypassed by test or emulator markers', () => {
   assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin', NODE_ENV: 'test', FUNCTIONS_EMULATOR: 'true',
     REQUIRE_APP_CHECK_FOR_LOGIN: 'false',
-  }), false);
-  assert.throws(() => __testables.shouldRequireLoginAppCheck({
+  }), true);
+  assert.equal(__testables.shouldRequireLoginAppCheck({
     K_SERVICE: 'verifypassengerlogin', NODE_ENV: 'test', FUNCTIONS_EMULATOR: 'true',
-  }), (error) => error.code === 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED');
+  }), true);
   assert.equal(__testables.shouldRequireLoginAppCheck({
     FUNCTIONS_EMULATOR: 'true',
     REQUIRE_APP_CHECK_FOR_LOGIN: 'false',

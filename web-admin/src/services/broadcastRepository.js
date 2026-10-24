@@ -1,5 +1,6 @@
 import { limitToLast, onValue, orderByChild, push, query, ref, set } from 'firebase/database';
 import { auth, db } from '../firebase';
+import { adminHttpRequest } from './adminHttpRequest';
 
 const getNotificationAdminEndpoint = (functionName) => {
   const explicitUrl = import.meta.env[`VITE_${functionName.replace(/([A-Z])/g, '_$1').toUpperCase()}_URL`]?.trim();
@@ -13,15 +14,7 @@ const callNotificationAdminEndpoint = async (functionName, body = {}) => {
   if (!endpoint) throw new Error('Notification administration is not configured for this deployment.');
   if (!auth.currentUser) throw new Error('Your admin session has expired. Sign in again and retry.');
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${await auth.currentUser.getIdToken()}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => null);
+  const { response, payload } = await adminHttpRequest(endpoint, body);
   if (!response.ok || !payload?.success) {
     const error = new Error(payload?.reason || 'The notification service could not complete that request.');
     error.code = payload?.reason || 'NOTIFICATION_SERVICE_ERROR';
@@ -95,5 +88,5 @@ export const requeueNotificationJobFully = async (jobId) => {
 
 export const subscribeToNotificationJob = ({ jobId, onData, onError }) => {
   if (!jobId) return () => {};
-  return onValue(ref(db, `notification_jobs/${jobId}`), (snapshot) => onData(snapshot.val() || null), onError);
+  return onValue(ref(db, `notification_jobs_v2/${jobId}`), (snapshot) => onData(snapshot.val() || null), onError);
 };

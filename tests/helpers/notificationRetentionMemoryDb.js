@@ -54,7 +54,7 @@ const snapshotFor = (value, ordered = null) => ({
 
 const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
   const data = clone(initial);
-  let rollout = data?.notification_retention_rollout?.v1;
+  let rollout = data?.notification_retention_rollout?.v2;
   if (rollout?.preparationComplete === true && ['shadow', 'compactor'].includes(rollout.phase)
     && !rollout.expectedEngineProtocolId && !rollout.retentionEngineProtocolId) {
     Object.assign(rollout, compiledRetentionProtocol());
@@ -63,9 +63,9 @@ const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
   const protocolId = rollout?.expectedEngineProtocolId || rollout?.retentionEngineProtocolId;
   if (protocolId) {
     data.notification_retention ||= {};
-    data.notification_retention.v1 ||= {};
+    data.notification_retention.v2 ||= {};
   }
-  const retentionV1 = data?.notification_retention?.v1;
+  const retentionV1 = data?.notification_retention?.v2;
   if (protocolId && !Object.prototype.hasOwnProperty.call(retentionV1, 'deployment_heartbeats')) {
     const observedAtMs = Number.isSafeInteger(rollout.updatedAtMs) ? rollout.updatedAtMs : 1;
     retentionV1.deployment_heartbeats = {
@@ -207,6 +207,7 @@ const createNotificationRetentionMemoryDb = (initial = {}, hooks = {}) => {
       set: async (value) => setAtPath(data, pathName, value),
       remove: async () => setAtPath(data, pathName, null),
       orderByKey: () => { query.orderBy = { kind: 'key' }; return api; },
+      orderByValue: () => { query.orderBy = { kind: 'child', field: '' }; return api; },
       orderByChild: (field) => { query.orderBy = { kind: 'child', field }; return api; },
       startAt: (value, key = null) => { query.startAt = { value, key }; return api; },
       startAfter: (value, key = null) => {

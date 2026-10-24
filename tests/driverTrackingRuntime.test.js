@@ -14,6 +14,8 @@ const tasks = new Map();
 const SID = `sess_v1_${'a'.repeat(32)}`;
 const scope = { role: 'driver', authUid: 'native-driver', cacheOwnerId: 'D-NATIVE', principalId: 'driver:D-NATIVE',
   sessionId: SID, tourId: 'TOUR_NATIVE', expiresAtMs: Date.now() + 3600000 };
+const firebaseAuth = { authStateReady: async () => {},
+  currentUser: { uid: scope.authUid, getIdToken: async () => 'synthetic' } };
 let permissions;
 let registered = false;
 let nativeOptions;
@@ -40,8 +42,8 @@ Module._load = function load(request, parent, isMain) {
   if (request === 'expo-task-manager') return { isAvailableAsync: async () => true,
     isTaskDefined: name => tasks.has(name), defineTask: (name, callback) => tasks.set(name, callback) };
   if (request === '@react-native-async-storage/async-storage') return { __esModule: true, default: storage };
-  if (request === '../../firebase') return { auth: { authStateReady: async () => {},
-    currentUser: { uid: scope.authUid, getIdToken: async () => 'synthetic' } }, realtimeDb: {
+  if (request === '../../firebase') return { auth: firebaseAuth,
+    getCurrentAppCheckToken: async () => 'synthetic-app-check', realtimeDb: {
     ref: () => { throw Error('RTDB SDK socket is unavailable in this background task'); },
   } };
   if (request === '../appSessionService') return { __esModule: true, default: {
@@ -57,6 +59,7 @@ process.env.EXPO_PUBLIC_FIREBASE_DATABASE_URL = 'https://synthetic.firebaseio.te
 process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'synthetic-test';
 const originalFetch = global.fetch;
 global.fetch = async (_url, options) => {
+  assert.equal(options.headers['X-Firebase-AppCheck'], 'synthetic-app-check');
   if (!network) throw Error('Synthetic HTTP offline');
   events.push(options.method === 'GET' ? 'http_read' : options.method === 'POST' ? 'retire' : 'http_write');
   return { ok: true, json: async () => options.method === 'GET' ? { sessionValid } : { success: true, withdrawalAcknowledged: true } };

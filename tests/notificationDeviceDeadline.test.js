@@ -5,14 +5,15 @@ require('@babel/register')({ extensions: ['.js'], presets: ['babel-preset-expo']
 const originalLoad = Module._load;
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
-for (const phase of ['revision', 'auth', 'fetch', 'body', 'backoff']) {
+for (const phase of ['revision', 'auth', 'appCheck', 'fetch', 'body', 'backoff']) {
   test(`notification total deadline fences a late ${phase} continuation`, async () => {
     const gate = deferred();
     const oldProject = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
     process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-deadline';
     Module._load = function load(request, parent, isMain) {
       if (request === '../../firebase') return { auth: { currentUser: { uid: 'fixture-phone',
-        getIdToken: async () => phase === 'auth' ? gate.promise : 'fixture-token' } } };
+        getIdToken: async () => phase === 'auth' ? gate.promise : 'fixture-token' } },
+        getCurrentAppCheckToken: async () => phase === 'appCheck' ? gate.promise : 'fixture-appcheck' };
       if (request === './notificationRegistrationRevision') return {
         allocateNotificationRegistrationRevision: async () => phase === 'revision' ? gate.promise : 1 };
       return originalLoad(request, parent, isMain);
@@ -30,7 +31,7 @@ for (const phase of ['revision', 'auth', 'fetch', 'body', 'backoff']) {
         timeoutMs: 20, wait: async () => gate.promise,
         fetchFn: async (_url, options) => { requests += 1; signal = options.signal; return phase === 'fetch' ? gate.promise : response; },
       }), error => error.code === 'NOTIFICATION_REQUEST_TIMEOUT');
-      const expectedRequests = ['revision', 'auth'].includes(phase) ? 0 : 1;
+      const expectedRequests = ['revision', 'auth', 'appCheck'].includes(phase) ? 0 : 1;
       assert.equal(requests, expectedRequests);
       if (signal) assert.equal(signal.aborted, true);
       gate.resolve(phase === 'fetch' ? response : phase === 'body' ? { success: true } : phase === 'revision' ? 1 : 'fixture-token');
@@ -39,6 +40,46 @@ for (const phase of ['revision', 'auth', 'fetch', 'body', 'backoff']) {
     } finally {
       Module._load = originalLoad;
       delete require.cache[modulePath];
+      if (oldProject === undefined) delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+      else process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = oldProject;
+    }
+  });
+}
+
+
+for (const phase of ['success', 'appCheckFailure', 'identityDuringRevision', 'identityDuringAuth', 'identityDuringAppCheck']) {
+  test(`notification HTTP authority contract: ${phase}`, async () => {
+    const oldProject = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-deadline';
+    const auth = { currentUser: { uid: 'phone-a', getIdToken: async () => {
+      if (phase === 'identityDuringAuth') auth.currentUser = { uid: 'phone-b' };
+      return 'a-token';
+    } } };
+    const modulePath = require.resolve('../services/notifications/notificationDeviceApiService');
+    Module._load = function load(request, parent, isMain) {
+      if (request === '../../firebase') return { auth, getCurrentAppCheckToken: async () => {
+        if (phase === 'appCheckFailure') throw new Error('Synthetic attestation unavailable');
+        if (phase === 'identityDuringAppCheck') auth.currentUser = { uid: 'phone-b' };
+        return 'attested-app-token';
+      } };
+      if (request === './notificationRegistrationRevision') return { allocateNotificationRegistrationRevision: async () => {
+        if (phase === 'identityDuringRevision') auth.currentUser = { uid: 'phone-b' };
+        return 1;
+      } };
+      return originalLoad(request, parent, isMain);
+    };
+    delete require.cache[modulePath]; let sends = 0;
+    try {
+      const { reconcileNotificationDevice } = require(modulePath);
+      const pending = reconcileNotificationDevice({ appSessionId: 'exact-sid' }, { fetchFn: async (_url, options) => {
+        sends += 1; assert.equal(options.headers['X-Firebase-AppCheck'], 'attested-app-token');
+        assert.equal(options.headers.Authorization, 'Bearer a-token');
+        return { ok: true, status: 200, json: async () => ({ success: true }) };
+      } });
+      if (phase === 'success') { await pending; assert.equal(sends, 1); }
+      else { await assert.rejects(pending); assert.equal(sends, 0); }
+    } finally {
+      Module._load = originalLoad; delete require.cache[modulePath];
       if (oldProject === undefined) delete process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
       else process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = oldProject;
     }

@@ -59,13 +59,13 @@ const toPublicAccountDeletionStatus = (job, { accepted = false } = {}) => {
 
 const normalizeAccountDeletionRollout = (value) => {
   if (value === null || value === undefined) {
-    return { valid: true, isDefault: true, phase: 'compatibility' };
+    return { valid: true, isDefault: true, phase: 'server_only' };
   }
   const valid = Boolean(value && typeof value === 'object' && !Array.isArray(value)
-    && value.schemaVersion === 1 && ['compatibility', 'server_only'].includes(value.phase)
+    && value.schemaVersion === 1 && value.phase === 'server_only'
     && Number.isSafeInteger(value.revision) && value.revision >= 1
     && Number.isSafeInteger(value.updatedAtMs) && value.updatedAtMs > 0);
-  return { valid, isDefault: false, phase: valid ? value.phase : 'compatibility' };
+  return { valid, isDefault: false, phase: valid ? value.phase : null };
 };
 
 module.exports = {

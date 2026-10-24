@@ -19,6 +19,8 @@ const { isValidAppSessionId } = loadLegacyLibrary('appSession');
 const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appSessionLock');
 const { cleanupAppSession } = loadLegacyLibrary('appSessionCleanup');
 
+const { supersedeInstallationAuthority } = loadLegacyLibrary('sessionPublicationAuthority');
+
 const onRequestWithResult = /** @type {any} */ (onRequest);
 
 const endAppSession = onRequestWithResult(
@@ -62,6 +64,7 @@ const endAppSession = onRequestWithResult(
         return res.status(409).json({ success: false, reason: 'SESSION_CHANGED' });
       }
       const endedAtMs = Date.now();
+      await supersedeInstallationAuthority({ db, authUid: session.authUid, expectedSessionId: session.sessionId, nowMs: endedAtMs });
       await cleanupAppSession({
         db,
         session,
@@ -114,7 +117,7 @@ const revokeAppSession = onRequestWithResult(
     const requestAuth = await verifyRequestAuthUid(req);
     if (!requestAuth.success) return res.status(401).json({ success: false, reason: 'NOT_AUTHENTICATED' });
     const db = admin.database();
-    if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db }))) {
+    if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db, claims: requestAuth.claims, requireSecondFactor: true }))) {
       return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
     }
     const targetAuthUid = resolveTrimmedString(req.body?.authUid);
@@ -136,6 +139,7 @@ const revokeAppSession = onRequestWithResult(
         return res.status(409).json({ success: false, reason: 'SESSION_CHANGED' });
       }
       const endedAtMs = Date.now();
+      await supersedeInstallationAuthority({ db, authUid: session.authUid, expectedSessionId: session.sessionId, nowMs: endedAtMs });
       await cleanupAppSession({
         db,
         session,

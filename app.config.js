@@ -39,9 +39,13 @@ module.exports = {
         }
       : undefined,
     ios: {
+      googleServicesFile: process.env.GOOGLE_SERVICES_PLIST || './GoogleService-Info.plist',
       supportsTablet: false,
       bundleIdentifier: 'com.lochlomondtravel.tourapp',
       buildNumber: '3',
+      entitlements: {
+        'com.apple.developer.devicecheck.appattest-environment': 'production',
+      },
       infoPlist: {
         NSPhotoLibraryUsageDescription:
           'Loch Lomond Travel uses your photo library to choose and upload tour, chat, and private photos in the app.',
@@ -58,6 +62,7 @@ module.exports = {
       },
     },
     android: {
+      googleServicesFile: process.env.GOOGLE_SERVICES_JSON || './google-services.json',
       adaptiveIcon: {
         foregroundImage: './assets/images/outward_app_icon.png',
         backgroundColor: '#007DC3',
@@ -82,17 +87,25 @@ module.exports = {
       favicon: './assets/favicon.png',
     },
     plugins: [
+      '@react-native-firebase/app',
+      '@react-native-firebase/app-check',
       'expo-font',
       'expo-image',
       'expo-secure-store',
       [
         'expo-build-properties',
         {
+          android: {
+            minSdkVersion: 24,
+            kotlinVersion: '2.4.0',
+          },
           ios: {
             deploymentTarget: '15.1',
+            useFrameworks: 'dynamic',
           },
         },
       ],
+      './plugins/withFirebaseAndroidToolchain',
       [
         'expo-location',
         {

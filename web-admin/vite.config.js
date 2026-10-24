@@ -1,14 +1,26 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
+import process from 'node:process'
+import { adminBuildPolicy } from './buildConfig.js'
 import react from '@vitejs/plugin-react'
 import packageJson from './package.json' with { type: 'json' }
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ command, mode }) => {
+  const policy = adminBuildPolicy({ command, mode, environment: { ...loadEnv(mode, process.cwd(), ''), ...process.env } });
+  return {
+  plugins: [react(), {
+    name: 'admin-production-app-check-boundary',
+    configResolved(config) {
+      if (command === 'build' && mode === 'verification' && config.build.outDir !== 'verification-dist') {
+        throw new Error('Verification output must stay in verification-dist; it cannot produce deployable dist.');
+      }
+    },
+  }],
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
   },
   build: {
+    outDir: policy.outDir,
     commonjsOptions: {
       include: [/node_modules/, /utils\/unifiedSyncContract\.js/],
     },
@@ -33,4 +45,5 @@ export default defineConfig({
       'Referrer-Policy': 'strict-origin-when-cross-origin',
     },
   },
+  };
 })

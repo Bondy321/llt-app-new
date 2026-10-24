@@ -51,14 +51,12 @@ const validIssue = (nowMs = Date.now(), issueId = 'issue_001') => ({
 
 const writeLeafAction = async (db, action) => {
   const base = `driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}`;
-  await Promise.all([
-    db.ref(`${base}/schemaVersion`).set(action.schemaVersion),
-    db.ref(`${base}/packRevision`).set(action.packRevision),
-    db.ref(`${base}/updatedAtMs`).set(action.updatedAtMs),
-    db.ref(`${base}/revisionAcknowledged`).set(action.revisionAcknowledged),
-    db.ref(`${base}/pickupStops/stop_1/state`).set(action.pickupStops.stop_1.state),
-    db.ref(`${base}/pickupStops/stop_1/updatedAtMs`).set(action.pickupStops.stop_1.updatedAtMs),
-  ]);
+  await db.ref(base).update({
+    schemaVersion: action.schemaVersion, packRevision: action.packRevision,
+    updatedAtMs: action.updatedAtMs, revisionAcknowledged: action.revisionAcknowledged,
+    'pickupStops/stop_1/state': action.pickupStops.stop_1.state,
+    'pickupStops/stop_1/updatedAtMs': action.pickupStops.stop_1.updatedAtMs,
+  });
 };
 
 test.before(async () => {
@@ -150,7 +148,7 @@ test('clients can never write source packs or read server-only ingestion and tom
     testEnv.unauthenticatedContext(),
     testEnv.authenticatedContext(DRIVER_UID),
     testEnv.authenticatedContext('passenger'),
-    testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23'),
+    testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23', { firebase: { sign_in_second_factor: 'totp' } }),
   ];
   for (const context of contexts) {
     const db = context.database(databaseURL);
@@ -163,11 +161,11 @@ test('clients can never write source packs or read server-only ingestion and tom
 });
 
 test('only operations admins can list the PII-free driver Tour Pack admin status index', async () => {
-  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23').database(databaseURL);
+  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL);
   await assertSucceeds(primaryAdmin.ref('driver_tour_pack_admin_status').get());
   await assertSucceeds(primaryAdmin.ref(`driver_tour_pack_admin_status/${DEPARTURE_KEY}`).get());
   await assertFails(primaryAdmin.ref(`driver_tour_pack_admin_status/${DEPARTURE_KEY}`).set({ forged: true }));
-  await assertSucceeds(testEnv.authenticatedContext('allowlisted-admin').database(databaseURL)
+  await assertSucceeds(testEnv.authenticatedContext('allowlisted-admin', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL)
     .ref('driver_tour_pack_admin_status').get());
 
   for (const uid of [DRIVER_UID, 'passenger', 'forged-driver']) {
@@ -181,8 +179,8 @@ test('feature flags are exact-read, coherent-driver canaries with admin-only boo
   const other = testEnv.authenticatedContext('other-driver').database(databaseURL);
   const passenger = testEnv.authenticatedContext('passenger').database(databaseURL);
   const forged = testEnv.authenticatedContext('forged-driver').database(databaseURL);
-  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23').database(databaseURL);
-  const allowlistedAdmin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+  const primaryAdmin = testEnv.authenticatedContext('9CWQ4705gVRkfW5Xki5LyvrmVp23', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL);
+  const allowlistedAdmin = testEnv.authenticatedContext('allowlisted-admin', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL);
 
   await assertSucceeds(assigned.ref('driver_tour_pack_feature_flags/global').get());
   await assertFails(passenger.ref('driver_tour_pack_feature_flags/global').get());
@@ -209,7 +207,7 @@ test('feature flags are exact-read, coherent-driver canaries with admin-only boo
 test('semantic change metadata is exact-assignment readable and operational projections are admin-only', async () => {
   const assigned = testEnv.authenticatedContext(DRIVER_UID).database(databaseURL);
   const passenger = testEnv.authenticatedContext('passenger').database(databaseURL);
-  const admin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+  const admin = testEnv.authenticatedContext('allowlisted-admin', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL);
 
   await assertSucceeds(assigned.ref(`driver_tour_pack_changes/${DEPARTURE_KEY}/latest`).get());
   await assertFails(assigned.ref('driver_tour_pack_changes').get());
@@ -266,7 +264,7 @@ test('driver action writes are exact-principal, bounded, closed-schema records',
   )));
   await assertFails(assigned.ref(`${base}/issues/issue_001/category`).set('other'));
 
-  const admin = testEnv.authenticatedContext('allowlisted-admin').database(databaseURL);
+  const admin = testEnv.authenticatedContext('allowlisted-admin', { firebase: { sign_in_second_factor: 'totp' } }).database(databaseURL);
   await assertSucceeds(admin.ref(base).update({
     'issues/issue_001/status': 'acknowledged',
     'issues/issue_001/updatedAtMs': stamp + 1,
@@ -311,4 +309,34 @@ test('the mobile action service writes progress through the permitted leaves', a
 
   assert.equal(result.success, true);
   assert.equal((await assigned.ref(`driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}/pickupStops/stop_1/state`).get()).val(), 'SKIPPED');
+});
+
+
+test('newer pickup intent fences late old results and generic TestFlight cannot authorize mutations', async () => {
+  const db = testEnv.authenticatedContext(DRIVER_UID).database(databaseURL);
+  const base = `driver_tour_pack_actions/${DEPARTURE_KEY}/${DRIVER_ID}`;
+  const stamp = Date.now();
+  await testEnv.withSecurityRulesDisabled(async context => {
+    await context.database(databaseURL).ref(base).remove();
+    await context.database(databaseURL).ref(`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`).set(true);
+  });
+  const action = validAction(stamp);
+  await assertSucceeds(writeLeafAction(db, action));
+  const change = (state, updatedAtMs) => db.ref(base).update({ 'pickupStops/stop_1/state': state, 'pickupStops/stop_1/updatedAtMs': updatedAtMs });
+  await assertSucceeds(change('SKIPPED', stamp + 1));
+  await assertFails(change('ARRIVED', stamp));
+  await assertFails(change('ARRIVED', stamp + 1));
+  await assertSucceeds(change('SKIPPED', stamp + 1));
+  assert.equal((await db.ref(`${base}/pickupStops/stop_1/state`).get()).val(), 'SKIPPED');
+  await testEnv.withSecurityRulesDisabled(context => context.database(databaseURL).ref().update({
+    [`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`]: false,
+    'driver_tour_pack_feature_flags/global': false, 'driver_tour_pack_feature_flags/testflight': true,
+  }));
+  await assertFails(change('COMPLETED', stamp + 2));
+  for (const field of ['schemaVersion', 'packRevision', 'revisionAcknowledged']) {
+    await assertFails(db.ref(`${base}/${field}`).set(1));
+  }
+  await assertFails(db.ref(`${base}/updatedAtMs`).set(stamp + 2));
+  await assertFails(db.ref(base).update(Object.fromEntries(Object.entries(validIssue(stamp + 2))
+    .map(([field, value]) => [`issues/issue_001/${field}`, value]))));
 });

@@ -1,9 +1,11 @@
 import { collectMessageIdCandidates, resolveReplyTargetIndex, mergeMessagesById } from './chatShared';
 // screens/ChatScreen.js - Premium Chat Experience
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { getChatMessageById } from '../../services/chatService';
 export default function useChatMessageNavigation(context, late) {
   const {
+    authUid,
+    principalId,
     groupedMessages,
     initialMessageId,
     internalDriverChat,
@@ -17,6 +19,20 @@ export default function useChatMessageNavigation(context, late) {
     setReplyJumpFeedbackMessage,
     tourId
   } = context;
+  const scopeKey = `${authUid}:${principalId}:${tourId}:${internalDriverChat}`;
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
+  useEffect(() => () => { currentScopeRef.current = null; }, []);
+  const retryMessageMedia = useCallback(async (message) => {
+    const captured = scopeKey;
+    const isCurrent = () => currentScopeRef.current === captured;
+    setMessages(current => current.map(item => item.id === message.id ? { ...item, mediaState: 'loading' } : item));
+    const result = await getChatMessageById({ tourId, messageId: message.id,
+      scope: internalDriverChat ? 'internal' : 'group', isCurrent });
+    if (!isCurrent()) return;
+    if (result.success && result.message) setMessages(current => mergeMessagesById(current, [result.message]));
+    else setMessages(current => current.map(item => item.id === message.id ? { ...item, mediaState: 'retryable' } : item));
+  }, [scopeKey, tourId, internalDriverChat, setMessages]);
   const jumpToMessageById = useCallback((messageId, fallbackId = null, {
     showMissingFeedback = true
   } = {}) => {
@@ -56,7 +72,7 @@ export default function useChatMessageNavigation(context, late) {
     });
     return true;
   }, [groupedMessages, messageListRef, pendingJumpIndexRef, replyTargetIndex, setHighlightedReplyTargetMessageId, setReplyJumpFeedbackMessage]);
-  const notificationTargetKey = initialMessageId && tourId ? `${internalDriverChat ? 'internal' : 'group'}:${tourId}:${initialMessageId}` : null;
+  const notificationTargetKey = initialMessageId && tourId ? `${scopeKey}:${initialMessageId}` : null;
   useEffect(() => {
     notificationTargetRef.current = {
       key: notificationTargetKey,
@@ -64,7 +80,6 @@ export default function useChatMessageNavigation(context, late) {
     };
   }, [notificationTargetKey, notificationTargetRef]);
   useEffect(() => {
-    let active = true;
     if (!notificationTargetKey || loading) return undefined;
     const targetState = notificationTargetRef.current;
     if (targetState.key !== notificationTargetKey || targetState.status === 'complete' || targetState.status === 'fetching' || targetState.status === 'missing') {
@@ -94,9 +109,10 @@ export default function useChatMessageNavigation(context, late) {
     getChatMessageById({
       tourId,
       messageId: initialMessageId,
+      isCurrent: () => currentScopeRef.current === scopeKey && notificationTargetRef.current.key === notificationTargetKey,
       scope: internalDriverChat ? 'internal' : 'group'
     }).then(result => {
-      if (!active || notificationTargetRef.current.key !== notificationTargetKey) return;
+      if (currentScopeRef.current !== scopeKey || notificationTargetRef.current.key !== notificationTargetKey) return;
       if (!result?.success || !result.message) {
         notificationTargetRef.current = {
           key: notificationTargetKey,
@@ -111,12 +127,11 @@ export default function useChatMessageNavigation(context, late) {
       };
       setMessages(current => mergeMessagesById(current, [result.message]));
     });
-    return () => {
-      active = false;
-    };
-  }, [initialMessageId, internalDriverChat, jumpToMessageById, loading, notificationTargetKey, notificationTargetRef, setMessages, setReplyJumpFeedbackMessage, tourId]);
+    return undefined;
+  }, [initialMessageId, internalDriverChat, jumpToMessageById, loading, notificationTargetKey, notificationTargetRef, setMessages, setReplyJumpFeedbackMessage, tourId, scopeKey]);
   Object.assign(late.current, {
     jumpToMessageById,
+    retryMessageMedia,
     notificationTargetKey
   });
   return {

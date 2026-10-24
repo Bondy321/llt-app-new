@@ -35,6 +35,7 @@ const withTemporaryEnvironment = (environment, callback) => {
   const names = new Set([
     'EAS_BUILD_PROFILE',
     'EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT',
+    'EXPO_PUBLIC_PASSENGER_TRIP_ENABLED',
     ...Object.keys(environment),
   ]);
   const previous = new Map([...names].map((name) => [name, process.env[name]]));
@@ -81,6 +82,7 @@ const createConfigSnapshot = (environment) => withTemporaryEnvironment(environme
     appTransportSecurity: config.ios?.infoPlist?.NSAppTransportSecurity || null,
     featureFlags: {
       driverTourPackTestflight: environment.EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT === 'true',
+      passengerTripEnabled: environment.EXPO_PUBLIC_PASSENGER_TRIP_ENABLED === 'true',
     },
     extra: config.extra || {},
   };

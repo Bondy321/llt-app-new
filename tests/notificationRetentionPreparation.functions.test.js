@@ -38,29 +38,29 @@ const pausedRollout = (revision = 0) => {
 const createPausedPreparationDb = (initial = {}, hooks = {}) => createNotificationRetentionMemoryDb({
   ...initial,
   notification_retention_rollout: initial.notification_retention_rollout
-    || { v1: pausedRollout() },
+    || { v2: pausedRollout() },
 }, hooks);
 
 test('scheduling once-writes a future ordinary boundary and ignores an active requeue until execution', async () => {
   const id = jobId('a');
   const completedAtMs = NOW_MS - 1_000;
   const db = createNotificationRetentionMemoryDb({
-    notification_jobs: {
+    notification_jobs_v2: {
       [id]: {
         ...terminalJob(id, completedAtMs),
         lease: { ownerId: 'delivery-worker', expiresAtMs: NOW_MS + 60_000 },
       },
     },
-    notification_requeue_jobs: { [id]: { status: 'processing', expiresAtMs: NOW_MS + 60_000 } },
+    notification_requeue_jobs_v2: { [id]: { status: 'processing', expiresAtMs: NOW_MS + 60_000 } },
   });
   const first = await ensureNotificationRetentionScheduled({ db, jobId: id, nowMs: NOW_MS });
   const second = await ensureNotificationRetentionScheduled({ db, jobId: id, nowMs: NOW_MS });
   assert.equal(first.reason, 'scheduled');
   assert.equal(first.dueAtMs, completedAtMs + RETENTION_MS);
   assert.equal(second.reason, 'already_scheduled');
-  assert.equal(db.getAtPath(`notification_jobs/${id}/updatedAtMs`), 123);
-  assert.equal(db.getAtPath(`notification_jobs/${id}/lease/ownerId`), 'delivery-worker');
-  assert.equal(Object.keys(db.getAtPath('notification_retention/v1/queue')).length, 1);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${id}/updatedAtMs`), 123);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${id}/lease/ownerId`), 'delivery-worker');
+  assert.equal(Object.keys(db.getAtPath('notification_retention/v2/queue')).length, 1);
 });
 
 test('preparation preserves indexed order, resumes by CAS and schedules ordinary and privacy records', async () => {
@@ -69,7 +69,7 @@ test('preparation preserves indexed order, resumes by CAS and schedules ordinary
   const privacyId = jobId('d');
   const recentId = jobId('f');
   const db = createPausedPreparationDb({
-    notification_jobs: {
+    notification_jobs_v2: {
       [secondId]: terminalJob(secondId, NOW_MS - RETENTION_MS),
       [firstId]: terminalJob(firstId, NOW_MS - RETENTION_MS - 1),
       [recentId]: terminalJob(recentId, NOW_MS - 1_000),
@@ -81,7 +81,7 @@ test('preparation preserves indexed order, resumes by CAS and schedules ordinary
         expiresAtMs: NOW_MS + 60_000,
       },
     },
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       orphan_1: {
         schemaVersion: 1,
         attemptId: 'orphan_1',
@@ -105,9 +105,9 @@ test('preparation preserves indexed order, resumes by CAS and schedules ordinary
   assert.equal(result.cumulative.materialized, 3);
   assert.equal(result.cumulative.scheduled, 4);
   assert.equal(result.cumulative.orphanAttemptsFound, 1);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/status'), 'complete');
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/status'), 'complete');
   assert.deepEqual(
-    Object.keys(db.getAtPath('notification_retention/v1/jobs')).sort(),
+    Object.keys(db.getAtPath('notification_retention/v2/jobs')).sort(),
     [firstId, secondId, recentId, privacyId].sort(),
   );
 });
@@ -116,11 +116,11 @@ test('preparation resumes against authoritative RTDB values after null-first cal
   const firstId = jobId('a');
   const secondId = jobId('b');
   const db = createPausedPreparationDb({
-    notification_jobs: {
+    notification_jobs_v2: {
       [firstId]: terminalJob(firstId, NOW_MS - RETENTION_MS - 2),
       [secondId]: terminalJob(secondId, NOW_MS - RETENTION_MS - 1),
     },
-    notification_delivery_attempts: {},
+    notification_delivery_attempts_v2: {},
   }, { nullFirstTransactions: true });
 
   const first = await runNotificationRetentionPreparation({
@@ -134,18 +134,18 @@ test('preparation resumes against authoritative RTDB values after null-first cal
   assert.equal(second.progressConflict, false);
   assert.equal(second.cumulative.scanned, 2);
   assert.equal(second.cumulative.requiresAttention, 0);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/revision'), 2);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/revision'), 2);
 });
 
 test('stale preparation progress cannot advance over a concurrent revision', async () => {
   const id = jobId('e');
   let injected = false;
   const db = createPausedPreparationDb({
-    notification_jobs: { [id]: terminalJob(id) },
-    notification_delivery_attempts: {},
+    notification_jobs_v2: { [id]: terminalJob(id) },
+    notification_delivery_attempts_v2: {},
   }, {
     beforeTransaction: ({ data, pathName }) => {
-      if (injected || pathName !== 'notification_retention/v1/preparation') return;
+      if (injected || pathName !== 'notification_retention/v2/preparation') return;
       injected = true;
       setAtPath(data, pathName, {
         schemaVersion: 1,
@@ -162,14 +162,14 @@ test('stale preparation progress cannot advance over a concurrent revision', asy
     db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 0, pageSize: 10,
   });
   assert.equal(result.progressConflict, true);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/revision'), 1);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/cursor'), 'ordinary~0~');
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/revision'), 1);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/cursor'), 'ordinary~0~');
 });
 
 test('preparation apply requires the exact rollout revision before every write', async () => {
   const id = jobId('7');
   const db = createPausedPreparationDb({
-    notification_jobs: { [id]: terminalJob(id) },
+    notification_jobs_v2: { [id]: terminalJob(id) },
   });
   const missingRevision = await runNotificationRetentionPreparation({
     db, nowMs: NOW_MS, apply: true, pageSize: 10,
@@ -179,20 +179,20 @@ test('preparation apply requires the exact rollout revision before every write',
     db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 1, pageSize: 10,
   });
   assert.equal(staleRevision.reason, 'rollout_changed');
-  assert.equal(db.getAtPath(`notification_jobs/${id}/retentionDueAtMs`), undefined);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation'), undefined);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${id}/retentionDueAtMs`), undefined);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation'), undefined);
 });
 
 test('rollout change after one idempotent preparation write never advances progress', async () => {
   const id = jobId('8');
   let changed = false;
   const db = createPausedPreparationDb({
-    notification_jobs: { [id]: terminalJob(id) },
+    notification_jobs_v2: { [id]: terminalJob(id) },
   }, {
     afterTransaction: ({ data, pathName, committed }) => {
-      if (!changed && committed && pathName === `notification_jobs/${id}`) {
+      if (!changed && committed && pathName === `notification_jobs_v2/${id}`) {
         changed = true;
-        setAtPath(data, 'notification_retention_rollout/v1', {
+        setAtPath(data, 'notification_retention_rollout/v2', {
           schemaVersion: 1, phase: 'shadow', revision: 1,
           ...compiledRetentionProtocol(),
           preparationComplete: true, preparationRolloutRevision: 0,
@@ -206,18 +206,18 @@ test('rollout change after one idempotent preparation write never advances progr
   });
   assert.equal(result.reason, 'rollout_changed');
   assert.equal(result.hasMore, true);
-  assert.equal(db.getAtPath(`notification_jobs/${id}/retentionDueAtMs`), NOW_MS);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation'), undefined);
-  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${id}`), undefined);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${id}/retentionDueAtMs`), NOW_MS);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation'), undefined);
+  assert.equal(db.getAtPath(`notification_retention/v2/jobs/${id}`), undefined);
 });
 
 test('completed preparation from an older rollout requires explicit restart', async () => {
   const db = createPausedPreparationDb({
     notification_retention_rollout: {
-      v1: pausedRollout(2),
+      v2: pausedRollout(2),
     },
     notification_retention: {
-      v1: {
+      v2: {
         preparation: {
           schemaVersion: 1, revision: 3, rolloutRevision: 0,
           cursor: 'privacy~0~', orphanCursor: null, cumulative: {},
@@ -236,7 +236,7 @@ test('completed preparation from an older rollout requires explicit restart', as
     pageSize: 10, budgets: { restart: true },
   });
   assert.notEqual(restarted.reason, 'rollout_revision_restart_required');
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/rolloutRevision'), 2);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/rolloutRevision'), 2);
 });
 
 test('preflight reports active, nonterminal, privacy and malformed-orphan exclusions', async () => {
@@ -245,7 +245,7 @@ test('preflight reports active, nonterminal, privacy and malformed-orphan exclus
   const nonTerminalId = jobId('4');
   const privacyId = jobId('5');
   const db = createNotificationRetentionMemoryDb({
-    notification_jobs: {
+    notification_jobs_v2: {
       [eligibleId]: {
         ...terminalJob(eligibleId), retentionDueAtMs: NOW_MS,
       },
@@ -261,7 +261,7 @@ test('preflight reports active, nonterminal, privacy and malformed-orphan exclus
         jobId: privacyId, status: 'privacy_deleted', expiresAtMs: NOW_MS + 10_000,
       },
     },
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       malformed: {
         schemaVersion: 1,
         attemptId: 'malformed',
@@ -296,8 +296,8 @@ test('complete preflight drains 500 jobs without cursor feedback or unbounded me
     jobs[id] = terminalJob(id);
   }
   const db = createNotificationRetentionMemoryDb({
-    notification_jobs: jobs,
-    notification_delivery_attempts: {},
+    notification_jobs_v2: jobs,
+    notification_delivery_attempts_v2: {},
   });
   const result = await runNotificationRetentionPreflightAll({
     db, nowMs: NOW_MS, pageSize: 100, maxPages: 20, budgets: { orphanPageSize: 100 },
@@ -312,7 +312,7 @@ test('complete preflight drains 500 jobs without cursor feedback or unbounded me
 test('historical v1 and v2 terminal attempts receive durable boundaries before orphan discovery', async () => {
   const parentlessJob = jobId('6');
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       attempt_v1: {
         schemaVersion: 1, attemptId: 'attempt_v1', jobId: parentlessJob,
         status: 'provider_accepted', createdAtMs: NOW_MS - RETENTION_MS - 20,
@@ -336,11 +336,11 @@ test('historical v1 and v2 terminal attempts receive durable boundaries before o
   assert.equal(result.preparationComplete, true);
   assert.equal(result.cumulative.attemptBoundariesMaterialized, 2);
   assert.equal(result.cumulative.orphanAttemptsFound, 2);
-  assert.equal(db.getAtPath('notification_delivery_attempts/attempt_v1/retentionDueAtMs'), NOW_MS - 10);
-  assert.equal(db.getAtPath('notification_delivery_attempts/attempt_v2/retentionDueAtMs'), NOW_MS);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/attemptMigrationComplete'), true);
-  assert.equal(db.getAtPath('notification_retention/v1/preparation/attemptScanEndAtMs'), NOW_MS);
-  const attemptQueries = db.queryLog.filter((entry) => entry.pathName === 'notification_delivery_attempts');
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/attempt_v1/retentionDueAtMs'), NOW_MS - 10);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/attempt_v2/retentionDueAtMs'), NOW_MS);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/attemptMigrationComplete'), true);
+  assert.equal(db.getAtPath('notification_retention/v2/preparation/attemptScanEndAtMs'), NOW_MS);
+  const attemptQueries = db.queryLog.filter((entry) => entry.pathName === 'notification_delivery_attempts_v2');
   assert.ok(attemptQueries.findIndex((entry) => entry.query.orderBy?.field === 'updatedAtMs')
     < attemptQueries.findIndex((entry) => entry.query.orderBy?.field === 'retentionDueAtMs'));
 });
@@ -359,9 +359,9 @@ test('equal updatedAtMs cursors are exact and a progress crash replays idempoten
     };
   }
   let injected = false;
-  const db = createPausedPreparationDb({ notification_delivery_attempts: attempts }, {
+  const db = createPausedPreparationDb({ notification_delivery_attempts_v2: attempts }, {
     beforeTransaction: ({ data, pathName }) => {
-      if (injected || pathName !== 'notification_retention/v1/preparation') return;
+      if (injected || pathName !== 'notification_retention/v2/preparation') return;
       injected = true;
       setAtPath(data, pathName, {
         schemaVersion: 1, revision: 1, rolloutRevision: null,
@@ -374,8 +374,8 @@ test('equal updatedAtMs cursors are exact and a progress crash replays idempoten
     db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 0, pageSize: 2,
   });
   assert.equal(crashed.progressConflict, true);
-  assert.equal(db.getAtPath('notification_delivery_attempts/same_time_0/retentionDueAtMs'), NOW_MS - 1_000 + RETENTION_MS);
-  assert.equal(db.getAtPath('notification_delivery_attempts/same_time_1/retentionDueAtMs'), NOW_MS - 1_000 + RETENTION_MS);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/same_time_0/retentionDueAtMs'), NOW_MS - 1_000 + RETENTION_MS);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/same_time_1/retentionDueAtMs'), NOW_MS - 1_000 + RETENTION_MS);
 
   let result;
   for (let page = 0; page < 10; page += 1) {
@@ -388,13 +388,13 @@ test('equal updatedAtMs cursors are exact and a progress crash replays idempoten
   assert.equal(result.preparationComplete, true);
   assert.equal(result.cumulative.attemptBoundariesMaterialized, 3);
   assert.equal(result.cumulative.attemptBoundariesAlreadyPrepared, 2);
-  assert.equal(new Set(Object.values(db.getAtPath('notification_delivery_attempts'))
+  assert.equal(new Set(Object.values(db.getAtPath('notification_delivery_attempts_v2'))
     .map((attempt) => attempt.retentionDueAtMs)).size, 1);
 });
 
 test('unsafe historical attempts fail closed with a hashed terminal warning', async () => {
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       unsafe_attempt: {
         schemaVersion: 1, attemptId: 'unsafe_attempt', jobId: jobId('a'),
         status: 'unknown_terminal_state', createdAtMs: NOW_MS - 2_000, updatedAtMs: NOW_MS - 1_000,
@@ -406,7 +406,7 @@ test('unsafe historical attempts fail closed with a hashed terminal warning', as
   });
   assert.equal(result.attemptMigrationWarnings, 1);
   assert.equal(result.requiresAttention, 1);
-  assert.equal(db.getAtPath('notification_delivery_attempts/unsafe_attempt/retentionDueAtMs'), undefined);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/unsafe_attempt/retentionDueAtMs'), undefined);
   const warnings = Object.values(db.getAtPath('operations_terminal_warnings/v1'));
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].reason, 'unsafe_historical_attempt');
@@ -415,7 +415,7 @@ test('unsafe historical attempts fail closed with a hashed terminal warning', as
 
 test('historical attempts missing a positive updated timestamp are scanned, preserved and warned', async () => {
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       missing_updated_at: {
         schemaVersion: 1,
         attemptId: 'missing_updated_at',
@@ -439,14 +439,14 @@ test('historical attempts missing a positive updated timestamp are scanned, pres
   assert.equal(result.attemptsScanned, 2);
   assert.equal(result.attemptMigrationWarnings, 2);
   assert.equal(result.preparationComplete, false);
-  assert.equal(db.getAtPath('notification_delivery_attempts/missing_updated_at/retentionDueAtMs'), undefined);
-  assert.equal(db.getAtPath('notification_delivery_attempts/zero_updated_at/retentionDueAtMs'), undefined);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/missing_updated_at/retentionDueAtMs'), undefined);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/zero_updated_at/retentionDueAtMs'), undefined);
   assert.equal(Object.keys(db.getAtPath('operations_terminal_warnings/v1')).length, 2);
 });
 
 test('non-numeric timestamps cannot sit beyond a numeric migration bound', async () => {
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       string_timestamp: {
         schemaVersion: 1,
         attemptId: 'string_timestamp',
@@ -475,7 +475,7 @@ test('an unpageable malformed timestamp suffix blocks instead of skipping unseen
     createdAtMs: NOW_MS - 1_000,
     updatedAtMs: { malformed: true },
   }]));
-  const db = createPausedPreparationDb({ notification_delivery_attempts: attempts });
+  const db = createPausedPreparationDb({ notification_delivery_attempts_v2: attempts });
   const result = await runNotificationRetentionPreparation({
     db, nowMs: NOW_MS, apply: true, expectedRolloutRevision: 0, pageSize: 1,
   });
@@ -489,7 +489,7 @@ test('an unpageable malformed timestamp suffix blocks instead of skipping unseen
 test('unsupported attempt schemas and shortened existing boundaries block preparation', async () => {
   const expectedBoundary = NOW_MS - 1_000 + RETENTION_MS;
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       future_schema: {
         schemaVersion: 3,
         attemptId: 'future_schema',
@@ -515,9 +515,9 @@ test('unsupported attempt schemas and shortened existing boundaries block prepar
   assert.equal(result.attemptBoundariesMaterialized, 0);
   assert.equal(result.attemptMigrationWarnings, 2);
   assert.equal(result.preparationComplete, false);
-  assert.equal(db.getAtPath('notification_delivery_attempts/future_schema/retentionDueAtMs'), undefined);
+  assert.equal(db.getAtPath('notification_delivery_attempts_v2/future_schema/retentionDueAtMs'), undefined);
   assert.equal(
-    db.getAtPath('notification_delivery_attempts/shortened_boundary/retentionDueAtMs'),
+    db.getAtPath('notification_delivery_attempts_v2/shortened_boundary/retentionDueAtMs'),
     expectedBoundary - 1,
   );
 });
@@ -526,7 +526,7 @@ test('a concurrently shortened boundary is rejected and warned inside the transa
   const attemptId = 'concurrently_shortened';
   let shortened = false;
   const db = createPausedPreparationDb({
-    notification_delivery_attempts: {
+    notification_delivery_attempts_v2: {
       [attemptId]: {
         schemaVersion: 1,
         attemptId,
@@ -538,7 +538,7 @@ test('a concurrently shortened boundary is rejected and warned inside the transa
     },
   }, {
     beforeTransaction: ({ data, pathName }) => {
-      if (!shortened && pathName === `notification_delivery_attempts/${attemptId}`) {
+      if (!shortened && pathName === `notification_delivery_attempts_v2/${attemptId}`) {
         shortened = true;
         setAtPath(data, `${pathName}/retentionDueAtMs`, 1);
       }
@@ -551,13 +551,13 @@ test('a concurrently shortened boundary is rejected and warned inside the transa
   assert.equal(result.attemptBoundariesMaterialized, 0);
   assert.equal(result.attemptMigrationWarnings, 1);
   assert.equal(result.preparationComplete, false);
-  assert.equal(db.getAtPath(`notification_delivery_attempts/${attemptId}/retentionDueAtMs`), 1);
+  assert.equal(db.getAtPath(`notification_delivery_attempts_v2/${attemptId}/retentionDueAtMs`), 1);
 });
 
 test('restart ignores a supplied future cursor and begins from canonical initial progress', async () => {
   const eligibleId = jobId('1');
   const eligible = terminalJob(eligibleId);
-  const db = createPausedPreparationDb({ notification_jobs: { [eligible.jobId]: eligible } });
+  const db = createPausedPreparationDb({ notification_jobs_v2: { [eligible.jobId]: eligible } });
   const result = await runNotificationRetentionPreparation({
     db,
     nowMs: NOW_MS,
@@ -569,7 +569,7 @@ test('restart ignores a supplied future cursor and begins from canonical initial
   });
   assert.equal(result.scanned, 1);
   assert.equal(result.materialized, 1);
-  assert.equal(db.getAtPath(`notification_jobs/${eligibleId}/retentionDueAtMs`), NOW_MS);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${eligibleId}/retentionDueAtMs`), NOW_MS);
 });
 
 test('a 100k-attempt history keeps migration reads at page plus one', async () => {
@@ -582,7 +582,7 @@ test('a 100k-attempt history keeps migration reads at page plus one', async () =
       updatedAtMs: NOW_MS - 100_000 + index,
     };
   }
-  const db = createNotificationRetentionMemoryDb({ notification_delivery_attempts: attempts });
+  const db = createNotificationRetentionMemoryDb({ notification_delivery_attempts_v2: attempts });
   const result = await runNotificationRetentionPreflight({
     db, nowMs: NOW_MS, pageSize: 25, budgets: { orphanPageSize: 25 },
   });
@@ -590,15 +590,15 @@ test('a 100k-attempt history keeps migration reads at page plus one', async () =
   assert.equal(result.attemptNonTerminalExcluded, 25);
   assert.equal(result.attemptMigrationComplete, false);
   assert.ok(result.maxRecordsInMemory <= 26);
-  const attemptQuery = db.queryLog.find((entry) => entry.pathName === 'notification_delivery_attempts'
+  const attemptQuery = db.queryLog.find((entry) => entry.pathName === 'notification_delivery_attempts_v2'
     && entry.query.orderBy?.field === 'updatedAtMs');
   assert.equal(attemptQuery.returned, 26);
 });
 
 test('paused rollout accepts preparation evidence from its exact nonzero revision', async () => {
   const db = createPausedPreparationDb({
-    notification_retention_rollout: { v1: pausedRollout(3) },
-    notification_retention: { v1: { preparation: {
+    notification_retention_rollout: { v2: pausedRollout(3) },
+    notification_retention: { v2: { preparation: {
       schemaVersion: 1,
       revision: 2,
       rolloutRevision: 3,
@@ -639,7 +639,7 @@ test('forward rollout transitions require matching completed preparation evidenc
     preparationComplete: true,
   });
   assert.equal(blocked.transitioned, false);
-  await db.ref('notification_retention/v1/preparation').set({
+  await db.ref('notification_retention/v2/preparation').set({
     schemaVersion: 1,
     revision: 2,
     rolloutRevision: 0,
@@ -685,7 +685,7 @@ test('forward rollout transitions require matching completed preparation evidenc
     hasMore: false,
     ...compiledRetentionProtocol(),
   };
-  await db.ref('notification_retention/v1/evidence/shadow').set({
+  await db.ref('notification_retention/v2/evidence/shadow').set({
     ...shadowEvidence,
     evidenceFingerprint: buildShadowEvidenceFingerprint(shadowEvidence),
   });
@@ -719,7 +719,7 @@ test('forward rollout transitions require matching completed preparation evidenc
     fixtureCompleted: true,
     ...compiledRetentionProtocol(),
   };
-  await db.ref('notification_retention/v1/evidence/canary').set({
+  await db.ref('notification_retention/v2/evidence/canary').set({
     ...canaryEvidence,
     evidenceFingerprint: buildCanaryEvidenceFingerprint(canaryEvidence),
   });
@@ -761,7 +761,7 @@ test('a shadow evidence change during activation is automatically rolled back', 
   let evidenceReads = 0;
   const db = createNotificationRetentionMemoryDb({
     notification_retention_rollout: {
-      v1: {
+      v2: {
         schemaVersion: 1,
         phase: 'shadow',
         revision: 1,
@@ -774,7 +774,7 @@ test('a shadow evidence change during activation is automatically rolled back', 
       },
     },
     notification_retention: {
-      v1: {
+      v2: {
         preparation: {
           schemaVersion: 1,
           status: 'complete',
@@ -789,10 +789,10 @@ test('a shadow evidence change during activation is automatically rolled back', 
     },
   }, {
     beforeOnce: async ({ data, pathName }) => {
-      if (pathName !== 'notification_retention/v1/evidence/shadow') return;
+      if (pathName !== 'notification_retention/v2/evidence/shadow') return;
       evidenceReads += 1;
       if (evidenceReads === 2) {
-        setAtPath(data, 'notification_retention/v1/evidence/shadow', failed);
+        setAtPath(data, 'notification_retention/v2/evidence/shadow', failed);
       }
     },
   });

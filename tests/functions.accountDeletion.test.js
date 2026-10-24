@@ -16,12 +16,16 @@ const {
   ensureNoActivePassengerAccountDeletion,
 } = require('../functions/src/domains/account-deletion/accountDeletionCoordination');
 const {
-  reserveAccountDeletion,
+  reserveAccountDeletion: productionReserveAccountDeletion,
 } = require('../functions/src/domains/account-deletion/accountDeletionFunctions');
 const {
   releaseOwnedDriverAuthority,
   releaseOwnedPassengerAuthority,
 } = require('../functions/src/domains/account-deletion/accountDeletionWorker');
+
+// Unit adapter tests update construction; real SDK admission tests enforce server rules.
+const reserveAccountDeletion = options => productionReserveAccountDeletion({ ...options,
+  createIssuer: ({ db }) => ({ db, close: async () => {} }) });
 
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
 const parts = (path = '') => String(path).split('/').filter(Boolean);
@@ -165,6 +169,7 @@ const passengerFixture = (overrides = {}) => {
   };
   return {
     'app_sessions/uid-account-delete': session,
+    'app_session_authority/uid-account-delete': { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: SESSION_ID },
     'users/uid-account-delete': profile,
     'notification_devices/uid-account-delete': {
       registrationRevision: 7,
@@ -183,7 +188,7 @@ const passengerFixture = (overrides = {}) => {
       registrationRevision: 7,
     },
     'passenger_identity_security/BOOK_DELETE': {
-      authorizedAuthUid: AUTH_UID,
+      authorizedAuthUid: AUTH_UID, deviceAuthorizationVersion: 2, authorizedAuthUids: { [AUTH_UID]: true },
       passengerPrincipalId: PASSENGER_ID,
       immutableMetadata: 'preserve',
     },
@@ -374,7 +379,7 @@ test('completed receipt replay is UID-independent for fresh anonymous recovery, 
     input: { expectedSessionId: SESSION_ID, deletionReceipt: newReceipt },
     nowMs: NOW + 12,
   });
-  assert.deepEqual(newRequest, { status: 422, reason: 'ACCOUNT_DELETION_SCOPE_INCOMPLETE' });
+  assert.deepEqual(newRequest, { status: 409, reason: 'SESSION_CHANGED' });
 });
 
 test('passenger authority release is compare-safe and preserves metadata and successors', async () => {
@@ -384,7 +389,7 @@ test('passenger authority release is compare-safe and preserves metadata and suc
     bookingRef: 'BOOK_DELETE',
     stablePassengerKey: PASSENGER_ID,
   };
-  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 2);
+  assert.equal(await releaseOwnedPassengerAuthority({ db, scope }), 3);
   assert.equal(db.read('passenger_identity_security/BOOK_DELETE/authorizedAuthUid'), undefined);
   assert.equal(db.read('passenger_identity_security/BOOK_DELETE/immutableMetadata'), 'preserve');
   assert.equal(db.read(`identity_bindings/${PASSENGER_ID}/${AUTH_UID}`), undefined);
@@ -440,7 +445,7 @@ test('passenger deletion requires an exact authorized device, unlocked principal
     { authorizedAuthUids: { [AUTH_UID]: false } },
     { authorizedAuthUids: { 'some-other-phone': true } },
     { deviceAuthorizationVersion: 99, authorizedAuthUid: AUTH_UID, authorizedAuthUids: { [AUTH_UID]: true } },
-    { authorizedAuthUid: AUTH_UID, authorizedAuthUids: { 'some-other-phone': true } },
+    { authorizedAuthUid: AUTH_UID, deviceAuthorizationVersion: 2, authorizedAuthUids: { 'some-other-phone': true } },
     { authorizedAuthUids: { [AUTH_UID]: true }, loginLocked: true },
     { authorizedAuthUids: { [AUTH_UID]: true }, passengerPrincipalId: `pax_v2_${'d'.repeat(32)}` },
   ]) {
@@ -526,7 +531,7 @@ test('partial passenger authority cleanup resumes without deleting changed or si
 });
 
 test('driver authority release preserves successor and policy-off secondary ownership', async () => {
-  const assignedSession = buildDriverSessionRecord({
+  const assignedSession = buildDriverSessionRecord({ driverLoginPolicyGeneration: 4,
     authUid: 'driver-secondary',
     driverId: 'DRIVER_1',
     tourId: null,

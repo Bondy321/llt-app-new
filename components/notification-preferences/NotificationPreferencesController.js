@@ -15,15 +15,17 @@ import {
 } from '../../utils/notificationCategories';
 
 import NotificationPreferencesView from './NotificationPreferencesView';
-import { COLORS } from './notificationPreferenceTheme';
 import useNotificationFeedController from './useNotificationFeedController';
 import {
+  ONBOARDING_COPY,
+  PERMISSION_TONE_BY_STATE,
   DEFAULT_MARKETING_PREFERENCES_MODEL as defaultMarketingPrefs,
   DEFAULT_OPS_PREFERENCES as defaultOpsPrefs,
   MARKETING_PREFERENCE_META as marketingPreferenceMeta,
   OPS_PREFERENCE_META as opsPreferenceMeta,
 } from './notificationPreferenceModel';
 export default function NotificationPreferencesScreen({
+  appSession,
   onBack,
   userId,
   cacheOwnerId = userId,
@@ -60,6 +62,7 @@ export default function NotificationPreferencesScreen({
   const preferenceLoadSeqRef = useRef(0);
   const initialCategoryHandledRef = useRef(null);
   const notificationFeed = useNotificationFeedController({
+    appSession,
     cacheOwnerId,
     isOnboarding,
     mountedRef,
@@ -452,39 +455,8 @@ export default function NotificationPreferencesScreen({
     setMarketingPrefs({ ...defaultMarketingPrefs });
   };
 
-  const onboardingCopy = {
-    passenger: {
-      title: 'Stay in the loop on your tour',
-      subtitle: 'Turn on notifications so you get pickup timing changes, driver announcements, and group updates without opening the app.',
-      icon: 'bus-clock',
-      cardTitle: 'Recommended for passengers',
-      cardBody: 'We will use notifications only for the updates you choose below. You can change everything later in Settings.',
-      primaryCta: 'Enable notifications',
-      secondaryCta: 'Maybe later',
-    },
-    driver: {
-      title: 'Enable critical driver alerts',
-      subtitle: 'Driver notifications are essential for itinerary changes, operational updates, and urgent HQ messages while on the road.',
-      icon: 'steering',
-      cardTitle: 'Recommended for drivers',
-      cardBody: 'To keep operations smooth, keep Driver Announcements and Itinerary Updates switched on.',
-      primaryCta: 'Enable driver alerts',
-      secondaryCta: 'Skip for now',
-    },
-  };
-
-  const activeOnboardingCopy = onboardingCopy[audience] || onboardingCopy.passenger;
-
-  const permissionToneByState = {
-    granted: { label: 'Enabled', color: COLORS.successGreen, icon: 'check-circle-outline' },
-    provisional: { label: 'Enabled quietly', color: COLORS.primaryBlue, icon: 'bell-outline' },
-    ephemeral: { label: 'Enabled temporarily', color: COLORS.warning, icon: 'clock-outline' },
-    denied: { label: 'Not enabled yet', color: COLORS.warning, icon: 'alert-outline' },
-    blocked: { label: 'Blocked in device settings', color: COLORS.danger, icon: 'alert-circle-outline' },
-    unavailable: { label: 'Unavailable on this device', color: COLORS.secondaryText, icon: 'cellphone-off' },
-  };
-
-  const permissionTone = permissionToneByState[permissionStatus?.state] || permissionToneByState.unavailable;
+  const activeOnboardingCopy = ONBOARDING_COPY[audience] || ONBOARDING_COPY.passenger;
+  const permissionTone = PERMISSION_TONE_BY_STATE[permissionStatus?.state] || PERMISSION_TONE_BY_STATE.unavailable;
 
   const handleTestNotification = async () => {
     try {

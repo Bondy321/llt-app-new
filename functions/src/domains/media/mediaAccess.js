@@ -97,7 +97,7 @@ const signPrivateMediaRecords = async ({
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId }) => {
+const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId, claims }) => {
   if (!isValidFirebaseKey(authUid) || !isValidFirebaseKey(tourId)) {
     return { allowed: false, reason: 'INVALID_INPUT' };
   }
@@ -107,6 +107,7 @@ const verifyCurrentTourPhotoAccess = async ({ db, authUid, tourId }) => {
   ]);
   if (!tourSnapshot.exists()) return { allowed: false, reason: 'NOT_FOUND' };
   if (authUid === OPERATIONS_ADMIN_UID || adminSnapshot.val() === true) {
+    if (claims?.firebase?.sign_in_second_factor !== 'totp') return { allowed: false, reason: 'ADMIN_MFA_REQUIRED' };
     return { allowed: true, role: 'admin', principalId: authUid };
   }
   const access = await verifyActiveAppSession({ db, authUid, expectedTourId: tourId });

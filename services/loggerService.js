@@ -137,6 +137,9 @@ class Logger {
     this.storageMode = logStorage.mode;
     this.flushTimer = null;
     this.persistTimer = null;
+    this.localWriteGeneration = 0;
+    this.localWritesBlocked = false;
+    this.localWriteTail = Promise.resolve();
     this.isFlushing = false;
     this.sequence = 0;
     this.serverMinLevelName = LOG_LEVELS[CONFIGURED_SERVER_MIN_LEVEL] !== undefined
@@ -152,8 +155,10 @@ class Logger {
   }
 
   async initializeLogger() {
+    const generation = this.localWriteGeneration;
     try {
       const storedLogs = await logStorage.getItemAsync('app_logs');
+      if (generation !== this.localWriteGeneration) return;
       if (storedLogs) {
         this.logQueue = JSON.parse(storedLogs);
         if (this.logQueue.length > this.maxLocalLogs) {
@@ -179,6 +184,7 @@ class Logger {
   }
 
   setUserId(userId) {
+    if (userId) this.localWritesBlocked = false;
     this.userId = userId;
     this.log('INFO', 'Logger', 'User ID set', { userId });
   }
@@ -264,16 +270,36 @@ class Logger {
   }
 
   async saveLogsLocally() {
+    if (this.localWritesBlocked) return;
     try {
       if (this.logQueue.length > this.maxLocalLogs) {
         this.logQueue = this.logQueue.slice(-this.maxLocalLogs);
       }
-      await logStorage.setItemAsync('app_logs', JSON.stringify(this.logQueue));
+      const generation = this.localWriteGeneration;
+      const serialized = JSON.stringify(this.logQueue);
+      const write = this.localWriteTail.catch(() => {}).then(() => (
+        generation === this.localWriteGeneration && !this.localWritesBlocked ? logStorage.setItemAsync('app_logs', serialized) : undefined
+      ));
+      this.localWriteTail = write;
+      await write;
     } catch (error) {
       if (!this.isProduction) {
         console.error(`Failed to save logs locally via ${this.storageMode}:`, redactSensitiveData({ error: error?.message || 'Unknown error' }));
       }
     }
+  }
+
+  async clearSessionDiagnostics() {
+    this.localWritesBlocked = true;
+    this.localWriteGeneration += 1;
+    clearTimeout(this.persistTimer);
+    clearTimeout(this.flushTimer);
+    this.persistTimer = null;
+    this.flushTimer = null;
+    this.userId = null;
+    this.logQueue = [];
+    await this.localWriteTail.catch(() => {});
+    await logStorage.deleteItemAsync('app_logs');
   }
 
   async wait(ms) {
@@ -312,6 +338,7 @@ class Logger {
     if (this.isFlushing) return;
 
     this.isFlushing = true;
+    const generation = this.localWriteGeneration;
     try {
       const uploadableLogs = this.logQueue.filter((log) => LOG_LEVELS[log.level] >= this.serverMinLevel);
       if (uploadableLogs.length === 0) return;
@@ -324,10 +351,12 @@ class Logger {
       for (let i = 0; i < writableLogs.length; i += this.maxServerBatchSize) {
         const chunk = writableLogs.slice(i, i + this.maxServerBatchSize);
         const sent = await this.sendLogsToServer(chunk);
+        if (generation !== this.localWriteGeneration) return;
         if (!sent) break;
         chunk.forEach((log) => sentLogIds.add(log.id));
       }
 
+      if (generation !== this.localWriteGeneration) return;
       this.logQueue = this.logQueue.filter((log) => !sentLogIds.has(log.id));
       await this.saveLogsLocally();
     } catch (error) {

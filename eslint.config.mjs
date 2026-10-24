@@ -32,6 +32,7 @@ export default [
     ignores: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/verification-dist/**',
       '**/build/**',
       '**/coverage/**',
       '**/.expo/**',

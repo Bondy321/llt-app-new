@@ -134,8 +134,8 @@ const protocolDb = ({
   rollout = activeRollout(), heartbeat = freshHeartbeat(), attestation = 'auto',
 } = {}) => (
   createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout },
-    notification_retention: { v1: {
+    notification_retention_rollout: { v2: rollout },
+    notification_retention: { v2: {
       deployment_heartbeats: heartbeat === null ? {} : {
         [PROTOCOL.retentionEngineProtocolId]: heartbeat,
       },
@@ -243,7 +243,7 @@ test('an exact heartbeat without a deployment attestation cannot run compactor',
   const result = await retention.runNotificationRetentionCycle({ db, nowMs: NOW_MS });
   assert.equal(result.mode, 'paused');
   assert.equal(result.budgetExhaustionReason, 'deployment_attestation_missing');
-  assert.equal(db.getAtPath('notification_retention_rollout/v1/phase'), 'paused');
+  assert.equal(db.getAtPath('notification_retention_rollout/v2/phase'), 'paused');
 });
 
 test('an expired deployment attestation pauses active compactor execution', async () => {
@@ -264,7 +264,7 @@ test('an expired deployment attestation pauses active compactor execution', asyn
   });
   assert.equal(result.mode, 'paused');
   assert.equal(result.budgetExhaustionReason, 'deployment_attestation_expired');
-  assert.equal(db.getAtPath('notification_retention_rollout/v1/phase'), 'paused');
+  assert.equal(db.getAtPath('notification_retention_rollout/v2/phase'), 'paused');
 });
 
 test('missing or expired deployed heartbeat compare-safely pauses destructive rollout', async () => {
@@ -273,7 +273,7 @@ test('missing or expired deployed heartbeat compare-safely pauses destructive ro
     const result = await retention.runNotificationRetentionCycle({ db, nowMs: NOW_MS });
     assert.equal(result.mode, 'paused');
     assert.match(result.budgetExhaustionReason, /^heartbeat_(missing|expired)$/u);
-    const rollout = db.getAtPath('notification_retention_rollout/v1');
+    const rollout = db.getAtPath('notification_retention_rollout/v2');
     assert.equal(rollout.phase, 'paused');
     assert.equal(rollout.revision, 11);
     assert.equal(rollout.preparationComplete, false);
@@ -289,7 +289,7 @@ test('source or rules protocol mismatch cannot authorize compactor', async () =>
     const result = await retention.runNotificationRetentionCycle({ db, nowMs: NOW_MS });
     assert.equal(result.mode, 'paused');
     assert.equal(result.budgetExhaustionReason, 'protocol_mismatch');
-    assert.equal(db.getAtPath('notification_retention_rollout/v1').phase, 'paused');
+    assert.equal(db.getAtPath('notification_retention_rollout/v2').phase, 'paused');
   }
 });
 
@@ -309,13 +309,13 @@ test('a concurrent rollout change prevents automatic pause from overwriting newe
   let raced = false;
   const rollout = activeRollout({ engineRulesDigest: '3'.repeat(64) });
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: rollout },
-    notification_retention: { v1: { deployment_heartbeats: {
+    notification_retention_rollout: { v2: rollout },
+    notification_retention: { v2: { deployment_heartbeats: {
       [PROTOCOL.retentionEngineProtocolId]: freshHeartbeat(),
     } } },
   }, {
     beforeTransaction: ({ data, pathName }) => {
-      if (raced || pathName !== 'notification_retention_rollout/v1') return;
+      if (raced || pathName !== 'notification_retention_rollout/v2') return;
       raced = true;
       setAtPath(data, pathName, {
         schemaVersion: 1, phase: 'paused', revision: 99,
@@ -327,8 +327,8 @@ test('a concurrent rollout change prevents automatic pause from overwriting newe
   });
   const result = await retention.runNotificationRetentionCycle({ db, nowMs: NOW_MS });
   assert.equal(result.mode, 'guard_rejected');
-  assert.equal(db.getAtPath('notification_retention_rollout/v1').revision, 99);
-  assert.equal(db.getAtPath('notification_retention_rollout/v1').phase, 'paused');
+  assert.equal(db.getAtPath('notification_retention_rollout/v2').revision, 99);
+  assert.equal(db.getAtPath('notification_retention_rollout/v2').phase, 'paused');
 });
 
 test('paused protocol refresh survives an RTDB null-first transaction callback', async () => {
@@ -350,7 +350,7 @@ test('paused protocol refresh survives an RTDB null-first transaction callback',
   let initialProposal;
   const db = {
     ref: (pathName) => {
-      assert.equal(pathName, 'notification_retention_rollout/v1');
+      assert.equal(pathName, 'notification_retention_rollout/v2');
       return {
         once: async () => ({ val: () => JSON.parse(JSON.stringify(rawRollout)) }),
         transaction: async (updater) => {
@@ -387,7 +387,7 @@ test('fresh exact deployment heartbeat permits the normal protocol-bound paused-
   const result = await retention.runNotificationRetentionCycle({ db, nowMs: NOW_MS });
   assert.equal(result.mode, 'canary_paused');
   assert.equal(result.budgetExhaustionReason, 'canary_required');
-  assert.equal(db.getAtPath('notification_retention_rollout/v1').phase, 'compactor');
+  assert.equal(db.getAtPath('notification_retention_rollout/v2').phase, 'compactor');
 });
 
 test('true paused phase performs no scheduling, legacy cleanup or deletion', async () => {
@@ -402,18 +402,18 @@ test('true paused phase performs no scheduling, legacy cleanup or deletion', asy
     expectedEngineProtocolId: PROTOCOL.retentionEngineProtocolId,
   };
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: paused },
-    notification_retention: { v1: { jobs: { private_job: {
+    notification_retention_rollout: { v2: paused },
+    notification_retention: { v2: { jobs: { private_job: {
       jobId: 'private_job', generation: 1, status: 'queued', phase: 'attempts',
       retentionDueAtMs: NOW_MS, queueKey: 'private_queue',
     } }, queue: { private_queue: {
       jobId: 'private_job', generation: 1, dueAtMs: NOW_MS,
     } } } },
-    notification_jobs: { private_job: {
+    notification_jobs_v2: { private_job: {
       jobId: 'private_job', status: 'provider_accepted', completedAtMs: NOW_MS - 1,
       retentionDueAtMs: NOW_MS,
     } },
-    notification_delivery_attempts: { private_attempt: {
+    notification_delivery_attempts_v2: { private_attempt: {
       attemptId: 'private_attempt', jobId: 'private_job', status: 'provider_accepted',
     } },
   });
@@ -433,13 +433,13 @@ test('server heartbeat is protocol-specific and an older engine path cannot over
     preparationComplete: false, updatedAtMs: NOW_MS - 1, ...PROTOCOL,
     expectedEngineProtocolId: PROTOCOL.retentionEngineProtocolId } });
   const oldProtocolId = 'f'.repeat(64);
-  await db.ref(`notification_retention/v1/deployment_heartbeats/${oldProtocolId}`).set({
+  await db.ref(`notification_retention/v2/deployment_heartbeats/${oldProtocolId}`).set({
     retentionEngineProtocolId: oldProtocolId, sequence: 99,
   });
   const written = await writeRetentionDeploymentHeartbeat({ db, nowMs: NOW_MS });
   assert.equal(written.retentionEngineProtocolId, PROTOCOL.retentionEngineProtocolId);
   assert.equal(db.getAtPath(heartbeatPath()).sequence, 1);
   assert.equal(db.getAtPath(
-    `notification_retention/v1/deployment_heartbeats/${oldProtocolId}`,
+    `notification_retention/v2/deployment_heartbeats/${oldProtocolId}`,
   ).sequence, 99);
 });

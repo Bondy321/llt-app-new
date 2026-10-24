@@ -145,7 +145,15 @@ const buildTimestampQuery = (messagesRef, {
 
 const readMessagesFromSnapshot = (snapshot) => buildMessagesFromSnapshot(snapshot);
 
-const hydrateGroupPhotoMessages = async (tourId, messages, resolveMediaFn = null) => {
+const photoPlaceholders = (messages, state = 'loading') => messages.map((message) => {
+  if (message?.type !== 'image' || !message.photoId) return message;
+  const { imageUrl: _imageUrl, thumbnailUrl: _thumbnailUrl, ...safeMessage } = message;
+  return { ...safeMessage, mediaState: state };
+});
+
+const hydrateGroupPhotoMessages = async (tourId, messages, resolveMediaFn = null, {
+  timeoutMs = 8000, isCurrent = () => true,
+} = {}) => {
   const safeMessages = Array.isArray(messages) ? messages : [];
   const photoMessages = safeMessages.filter((message) => (
     message?.type === 'image' && typeof message.photoId === 'string' && message.photoId.trim()
@@ -154,15 +162,35 @@ const hydrateGroupPhotoMessages = async (tourId, messages, resolveMediaFn = null
   const resolver = resolveMediaFn || require('../photoService').resolveGroupPhotoMedia;
   const uniquePhotos = [...new Set(photoMessages.map((message) => message.photoId.trim()))]
     .map((id) => ({ id }));
-  const hydrated = await resolver({ tourId, photos: uniquePhotos });
+  // Small independent batches preserve successful media when a sibling signing
+  // request fails. The text snapshot is already published by the subscriber.
+  // A timeout bounds the UI wait; late requests never publish into a new scope.
+  const hydrated = [];
+  let offset = 0;
+  const worker = async () => {
+    while (offset < uniquePhotos.length && isCurrent()) {
+      const batch = uniquePhotos.slice(offset, offset += 20);
+      let timer;
+      try {
+        const result = await Promise.race([
+          Promise.resolve().then(() => resolver({ tourId, photos: batch })),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Media signing timed out')), timeoutMs); }),
+        ]);
+        if (isCurrent() && Array.isArray(result)) hydrated.push(...result);
+      } catch { /* Each failed batch remains an explicit retryable placeholder. */ }
+      finally { clearTimeout(timer); }
+    }
+  };
+  await Promise.all([worker(), worker()]);
   const mediaById = new Map(hydrated.map((photo) => [photo.id, photo]));
-  return safeMessages.map((message) => {
+  return photoPlaceholders(safeMessages, 'retryable').map((message) => {
     const media = mediaById.get(message.photoId);
     if (!media) return message;
     const imageUrl = media.viewerUrl || media.sourceUrl || media.thumbnailUrl || null;
     const thumbnailUrl = media.thumbnailUrl || media.viewerUrl || media.sourceUrl || null;
     return {
       ...message,
+      mediaState: imageUrl ? 'ready' : 'retryable',
       ...(imageUrl ? { imageUrl } : {}),
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
     };
@@ -180,6 +208,7 @@ module.exports = {
   getChatSessionStatusPath,
   getChatMessagesPath,
   hydrateGroupPhotoMessages,
+  photoPlaceholders,
   normalizeChatScope,
   readMessagesFromSnapshot,
   sanitizeReplyContext,

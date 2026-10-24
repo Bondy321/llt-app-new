@@ -6,11 +6,11 @@ the 30-day minimum retention period, account-deletion tombstones, or business-re
 
 ## Authority and storage
 
-`notification_jobs/{jobId}` remains the only delivery authority. Retention metadata is private under
-`notification_retention/v1`; clients, including operations administrators, cannot read or write it.
-The rollout record is separately private at `notification_retention_rollout/v1`.
+`notification_jobs_v2/{jobId}` remains the only delivery authority. Retention metadata is private under
+`notification_retention/v2`; clients, including operations administrators, cannot read or write it.
+The rollout record is separately private at `notification_retention_rollout/v2`.
 
-Each `notification_retention/v1/jobs/{jobId}` record is both durable phase state and the
+Each `notification_retention/v2/jobs/{jobId}` record is both durable phase state and the
 authoritative indexed due-queue item. Scheduling transacts only that child. The separate `queue`
 tree is a non-authoritative rollback projection for the prior worker and never grants deletion
 authority.

@@ -136,12 +136,29 @@ function normalizeSnapshot(snapshot, { tourId, driverId, now = Date.now() } = {}
     driverId: canonicalDriverId,
     fetchedAtMs,
     bookings,
+    ...(snapshot.lastReconciliation?.reason === 'SERVER_NEWER' ? { lastReconciliation: {
+      reason: 'SERVER_NEWER', bookingRef: text(snapshot.lastReconciliation.bookingRef, MAX_BOOKING_ID_LENGTH),
+      attemptedStatus: MANIFEST_STATUSES.has(snapshot.lastReconciliation.attemptedStatus) ? snapshot.lastReconciliation.attemptedStatus : 'PENDING',
+      serverStatus: MANIFEST_STATUSES.has(snapshot.lastReconciliation.serverStatus) ? snapshot.lastReconciliation.serverStatus : 'PENDING',
+      serverLastUpdated: text(snapshot.lastReconciliation.serverLastUpdated, 64) || null,
+    } } : {}),
     stats: recomputeStats(bookings),
   };
 }
 
 function createDriverManifestCacheService({ storage = defaultStorage, now = () => Date.now() } = {}) {
   const locks = new Map();
+  const generations = new Map();
+  const listeners = new Map();
+  const generation = key => generations.get(key) || 0;
+  const emit = (key, snapshot, reason) => { for (const listener of listeners.get(key) || []) listener({ snapshot, reason }); };
+  const subscribe = ({ tourId, driverId }, listener) => {
+    const identity = validateIdentity(tourId, driverId); if (!identity) return () => {};
+    const key = cacheKey(identity.tourId, identity.driverId);
+    if (!listeners.has(key)) listeners.set(key, new Set());
+    listeners.get(key).add(listener);
+    return () => { listeners.get(key)?.delete(listener); if (!listeners.get(key)?.size) listeners.delete(key); };
+  };
   const withLock = async (key, operation) => {
     const previous = locks.get(key) || Promise.resolve();
     const current = previous.catch(() => {}).then(operation);
@@ -166,10 +183,10 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
       return snapshot ? response.ok(snapshot) : response.fail('Cached manifest did not pass validation.');
     } catch (error) { return response.fail(error); }
   };
-  const replace = async ({ tourId, driverId, manifest, fetchedAtMs = now() } = {}) => {
+  const replace = async ({ tourId, driverId, manifest, fetchedAtMs = now(), isCurrent = () => true, pendingActions = null } = {}) => {
     const identity = validateIdentity(tourId, driverId);
     if (!identity) return response.fail('A canonical tour ID and D-* driver ID are required.');
-    const snapshot = normalizeSnapshot({
+    let snapshot = normalizeSnapshot({
       ...(manifest || {}),
       // The secure Function must explicitly mark a full response. Never turn a
       // partial or legacy payload into a complete local snapshot client-side.
@@ -178,21 +195,52 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
       fetchedAtMs,
     }, { ...identity, now: now() });
     if (!snapshot) return response.fail('Manifest snapshot did not pass validation.');
-    const serialized = JSON.stringify(snapshot);
+    let serialized = JSON.stringify(snapshot);
     if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) return response.fail('Manifest snapshot exceeds the snapshot size limit.');
     const key = cacheKey(identity.tourId, identity.driverId);
+    const expectedGeneration = generation(key);
     try {
-      await withLock(key, () => storage.setItemAsync(key, serialized));
+      await withLock(key, async () => {
+        if (generation(key) !== expectedGeneration || !isCurrent()) throw new Error('Manifest scope changed');
+        const previousRaw = await storage.getItemAsync(key);
+        let previous; try { previous = previousRaw ? normalizeSnapshot(JSON.parse(previousRaw), { ...identity, now: now() }) : null; } catch { previous = null; }
+        if (previous?.lastReconciliation && !snapshot.lastReconciliation) {
+          snapshot = { ...snapshot, lastReconciliation: previous.lastReconciliation };
+          serialized = JSON.stringify(snapshot);
+        }
+        if (pendingActions) {
+          const queued = await pendingActions();
+          if (!queued.success) throw new Error('Pending manifest changes could not be loaded');
+          const bookings = snapshot.bookings.map(booking => {
+            const latest = queued.data.filter(action => action.type === 'MANIFEST_UPDATE'
+              && action.payload?.bookingRef === booking.id).at(-1);
+            if (!latest) return booking;
+            const payload = latest.payload;
+            if ((booking.rosterRevision || payload.rosterRevision) && (booking.rosterRevision !== payload.rosterRevision
+              || JSON.stringify(booking.passengerIds) !== JSON.stringify(payload.passengerIds))) return booking;
+            const normalized = normalizeBooking({ ...booking, passengerStatus: payload.passengerStatuses });
+            return normalized || booking;
+          });
+          snapshot = { ...snapshot, bookings, stats: recomputeStats(bookings) };
+          serialized = JSON.stringify(snapshot);
+          if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) throw new Error('Manifest snapshot exceeds the snapshot size limit.');
+        }
+        if (generation(key) !== expectedGeneration || !isCurrent()) throw new Error('Manifest scope changed');
+        await storage.setItemAsync(key, serialized);
+        if (generation(key) === expectedGeneration && isCurrent()) emit(key, snapshot, 'replace');
+      });
       return response.ok(snapshot);
     } catch (error) { return response.fail(error); }
   };
-  const applyOptimisticUpdate = async ({ tourId, driverId, bookingRef, passengerStatuses, passengerIds, rosterRevision } = {}) => {
+  const applyOptimisticUpdate = async ({ tourId, driverId, bookingRef, passengerStatuses, passengerIds, rosterRevision, isCurrent = () => true, conflict = null, reason = 'optimistic' } = {}) => {
     const identity = validateIdentity(tourId, driverId);
     const bookingId = text(bookingRef, MAX_BOOKING_ID_LENGTH).toUpperCase();
     if (!identity || !bookingId || !Array.isArray(passengerStatuses)) return response.fail('A scoped manifest booking update is required.');
     const key = cacheKey(identity.tourId, identity.driverId);
+    const expectedGeneration = generation(key);
     try {
       return await withLock(key, async () => {
+        if (generation(key) !== expectedGeneration || !isCurrent()) return response.fail('Manifest scope changed');
         const raw = await storage.getItemAsync(key);
         if (!raw) return response.fail('No complete manifest snapshot is cached.');
         if (utf8ByteLength(raw) > MAX_SNAPSHOT_BYTES) return response.fail('Cached manifest exceeds the snapshot size limit.');
@@ -212,10 +260,14 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
         if (statuses.some((status) => !MANIFEST_STATUSES.has(status))) return response.fail('Passenger status is invalid.');
         const bookings = [...snapshot.bookings];
         bookings[bookingIndex] = { ...booking, passengerStatus: statuses, status: deriveStatus(statuses) };
-        const next = { ...snapshot, bookings, stats: recomputeStats(bookings) };
+        const next = { ...snapshot, bookings, stats: recomputeStats(bookings),
+          ...(conflict ? { lastReconciliation: { reason: 'SERVER_NEWER', bookingRef: bookingId, serverStatus: conflict.serverStatus, attemptedStatus: conflict.attemptedStatus, serverLastUpdated: conflict.serverLastUpdated || null } } : {}) };
+        if (reason === 'reconciliation' && !conflict) delete next.lastReconciliation;
         const serialized = JSON.stringify(next);
         if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) return response.fail('Manifest snapshot exceeds the snapshot size limit.');
+        if (generation(key) !== expectedGeneration || !isCurrent()) return response.fail('Manifest scope changed');
         await storage.setItemAsync(key, serialized);
+        if (generation(key) === expectedGeneration && isCurrent()) emit(key, next, reason);
         return response.ok(next);
       });
     } catch (error) { return response.fail(error); }
@@ -223,12 +275,33 @@ function createDriverManifestCacheService({ storage = defaultStorage, now = () =
   const purge = async ({ tourId, driverId } = {}) => {
     const identity = validateIdentity(tourId, driverId);
     if (!identity) return response.fail('A canonical tour ID and D-* driver ID are required.');
+    const key = cacheKey(identity.tourId, identity.driverId);
+    generations.set(key, generation(key) + 1);
     try {
-      await withLock(cacheKey(identity.tourId, identity.driverId), () => storage.deleteItemAsync(cacheKey(identity.tourId, identity.driverId)));
+      await withLock(key, () => storage.deleteItemAsync(cacheKey(identity.tourId, identity.driverId)));
       return response.ok(true);
     } catch (error) { return response.fail(error); }
   };
-  return { get, replace, applyOptimisticUpdate, purge };
+  const applyQueuedUpdate = async ({ scope, actionId, isCurrent = () => true } = {}) => {
+    const { withQueueMutationLock, filterActionsForScope, runtimeState } = require('./offline-sync/offlineSyncContext');
+    const { getQueueRaw } = require('./offline-sync/syncStatusService');
+    const expectedGeneration = runtimeState.activeSessionGeneration;
+    const current = () => isCurrent() && runtimeState.activeSessionGeneration === expectedGeneration;
+    return withQueueMutationLock(async () => {
+      if (!current()) return response.fail('Manifest session changed');
+      const queued = filterActionsForScope(await getQueueRaw(), scope);
+      const requested = queued.find(action => action.id === actionId && action.type === 'MANIFEST_UPDATE');
+      const driverId = scope.cacheOwnerId || scope.principalId?.replace(/^driver:/, '');
+      if (!requested) return { ...await get({ tourId: scope.tourId, driverId }), queued: false };
+      const latest = queued.filter(action => action.type === 'MANIFEST_UPDATE'
+        && action.payload?.bookingRef === requested.payload.bookingRef).at(-1);
+      const payload = latest.payload;
+      return { ...await applyOptimisticUpdate({ tourId: scope.tourId, driverId, bookingRef: payload.bookingRef,
+        passengerStatuses: payload.passengerStatuses, passengerIds: payload.passengerIds,
+        rosterRevision: payload.rosterRevision, isCurrent: current }), queued: true };
+    });
+  };
+  return { get, replace, applyOptimisticUpdate, applyQueuedUpdate, purge, subscribe };
 }
 
 const service = createDriverManifestCacheService();

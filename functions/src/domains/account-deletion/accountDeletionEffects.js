@@ -33,7 +33,7 @@ const readAccountDeletionKeyPage = async (ref, afterKey, limit) => {
 
 const releaseOwnedPassengerAuthority = async ({ db, scope, leaseGuard = null }) => {
   // Each phone owns only its exact device leaf and binding. Unversioned records
-  // authorize via the legacy scalar, so remove it too only for this exact UID.
+  // may retain a historical scalar; remove it too only for this exact UID.
   // Never replace the whole security record or the shared authorization map.
   const ownedLeaves = [
     [`passenger_identity_security/${scope.bookingRef}/authorizedAuthUids/${scope.authUid}`, true],
@@ -143,7 +143,7 @@ const redactAuthoredChatNotificationJob = async ({
   let recordsRemoved = 0;
   for (const candidate of candidates) {
     const jobId = buildNotificationJobId(candidate.sourceType, candidate.sourceId);
-    const jobRef = db.ref(`notification_jobs/${jobId}`);
+    const jobRef = db.ref(`notification_jobs_v2/${jobId}`);
     const observedJob = (await jobRef.once('value')).val();
     let replacedExisting = false;
     let blockedByLiveLease = false;
@@ -178,15 +178,15 @@ const redactAuthoredChatNotificationJob = async ({
       throw error;
     }
     const queueRoots = {
-      fanout: 'notification_job_fanout_queue',
-      retry: 'notification_attempt_retry_queue',
-      receipt: 'notification_receipt_due_queue',
+      fanout: 'notification_job_fanout_queue_v2',
+      retry: 'notification_attempt_retry_queue_v2',
+      receipt: 'notification_receipt_due_queue_v2',
     };
     await db.ref().update({
-      [`notification_job_token_claims/${jobId}`]: null,
-      [`notification_job_recipients/${jobId}`]: null,
-      [`notification_job_audience_claims/${jobId}`]: null,
-      [`notification_delivery_warnings/${jobId}`]: null,
+      [`notification_job_token_claims_v2/${jobId}`]: null,
+      [`notification_job_recipients_v2/${jobId}`]: null,
+      [`notification_job_audience_claims_v2/${jobId}`]: null,
+      [`notification_delivery_warnings_v2/${jobId}`]: null,
       ...(observedJob?.queueKind && observedJob?.queueKey && queueRoots[observedJob.queueKind]
         ? { [`${queueRoots[observedJob.queueKind]}/${observedJob.queueKey}`]: null }
         : {}),
@@ -319,11 +319,30 @@ const scrubChatPage = async ({ db, scope, cursor, nowMs, lease }) => {
   };
 };
 
+const purgeOwnedStaffEnrolments = async ({ db, authUid, nowMs, leaseGuard = null, limit = 50 }) => {
+  const page = (await db.ref('driver_enrolments').orderByChild('authUid').equalTo(authUid)
+    .limitToFirst(limit + 1).once('value')).val() || {};
+  let recordsRemoved = 0;
+  for (const [hash] of Object.entries(page).slice(0, limit)) {
+    if (leaseGuard) await assertCurrentJobLease(leaseGuard);
+    const result = await transactExistingRecord(db.ref(`driver_enrolments/${hash}`), current => {
+      if (current?.authUid !== authUid) return undefined;
+      const { authUid: _uid, redemptionId: _redemption, installationEpoch: _epoch, ...audit } = current;
+      return { ...audit, state: 'revoked', revokedAtMs: nowMs, reason: 'account_deleted' };
+    });
+    recordsRemoved += Number(result.applied === true);
+  }
+  return { recordsRemoved, done: Object.keys(page).length <= limit };
+};
+
 const deleteUidAccountRecords = async ({ db, scope, leaseGuard = null }) => {
   const updates = {
     [`app_sessions/${scope.authUid}`]: null,
     [`users/${scope.authUid}`]: null,
     [`logs/${scope.authUid}`]: null,
+    // The worker reaches this stage only after permanent notification deletion.
+    [`notification_mutation_authority/${scope.authUid}`]: null,
+    [`driver_device_authorizations/${scope.authUid}`]: null,
   };
   if (scope.tourId) {
     [...new Set(scope.actorKeys || [])].forEach((actorKey) => {
@@ -348,6 +367,7 @@ const deleteUidAccountRecords = async ({ db, scope, leaseGuard = null }) => {
 };
 
 module.exports = {
+  purgeOwnedStaffEnrolments,
   deleteGroupMediaPage,
   deletePrivateMediaPage,
   deleteUidAccountRecords,

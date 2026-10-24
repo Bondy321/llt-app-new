@@ -14,6 +14,10 @@ const {
   withTourPackWriteLock,
 } = require('./offlineSyncContext');
 
+const generations = new Map();
+const generationFor = key => generations.get(key) || 0;
+const revoke = key => generations.set(key, generationFor(key) + 1);
+
 const saveTourPack = async (tourId, role, payload, options = {}) => {
   try {
     if (!tourId || !role) return RESPONSE.fail('tourId and role are required');
@@ -29,7 +33,9 @@ const saveTourPack = async (tourId, role, payload, options = {}) => {
       hasFetchedAt: Boolean(payload?.fetchedAt),
     });
     const key = cacheKey(tourId, role, ownerId);
+    const generation = generationFor(key);
     const nextPayload = await withTourPackWriteLock(key, async () => {
+      if (generationFor(key) !== generation) throw new Error('Tour Pack scope was retired');
       const rawExistingPack = await storage.getItemAsync(key);
       const existingPack = safeJsonParse(rawExistingPack, {});
       const fetchedAt = payload.fetchedAt || new Date().toISOString();
@@ -108,7 +114,9 @@ const setTourPackMeta = async (tourId, role, meta = {}, options = {}) => {
       metaKeys: meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 20) : [],
     });
     const key = metaKey(tourId, role, ownerId);
+    const generation = generationFor(key);
     const payload = await withTourPackWriteLock(key, async () => {
+      if (generationFor(key) !== generation) throw new Error('Tour Pack scope was retired');
       const rawExistingMeta = await storage.getItemAsync(key);
       const existingMeta = safeJsonParse(rawExistingMeta, {});
       const requestedLastSyncedAt = meta.lastSyncedAt || new Date().toISOString();
@@ -204,6 +212,7 @@ const purgeTourPack = async (tourId, role, options = {}) => {
     const packStorageKey = cacheKey(tourId, role, ownerId);
     const metaStorageKey = metaKey(tourId, role, ownerId);
 
+    revoke(packStorageKey); revoke(metaStorageKey);
     await withTourPackWriteLock(packStorageKey, () => withTourPackWriteLock(metaStorageKey, async () => {
       await storage.deleteItemAsync(packStorageKey);
       await storage.deleteItemAsync(metaStorageKey);

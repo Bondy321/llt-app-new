@@ -53,6 +53,11 @@ test.beforeEach(async () => {
       principalType: 'driver', driverId: DRIVER, tourId: TOUR, status: 'active', driverLoginPolicyGeneration: 0,
       issuedAtMs: now, lastAuthenticatedAtMs: now, expiresAtMs, sessionRevision: 1 };
   }
+  for (const [uid, sid] of [[UID, SID], [OTHER, OTHER_SID]]) {
+    records[`app_session_authority/${uid}`] = { schemaVersion: 1, state: 'committed', epoch: 'a'.repeat(48), sessionId: sid };
+    records[`driver_device_authorizations/${uid}`] = { schemaVersion: 1, state: 'active', driverId: DRIVER, sessionId: sid, generation: 'c'.repeat(48) };
+  }
+  records[`driver_staff_policy/${DRIVER}`] = { schemaVersion: 1, generation: 'c'.repeat(48) };
   await trusted(async db => { await db.ref().set(null); await db.ref().update(records); });
 });
 
@@ -63,6 +68,7 @@ const harness = async (live = 'track_integration_one', fetchOverride = null) => 
   const auth = { currentUser: { uid: UID, getIdToken: async () => createMockUserToken({ sub: UID, user_id: UID }, PROJECT) } };
   const realFetch = fetch;
   const transport = createTrackingRestRepository({ database: { ref: () => { throw Error('SDK socket unavailable'); } }, auth,
+    getAppCheckToken: async () => 'synthetic-app-check',
     baseUrl: restURL, retireEndpoint: 'https://synthetic.test/stop',
     fetchFn: async (url, options) => {
       if (options.method === 'POST') {

@@ -39,7 +39,7 @@ import { getUKCalendarDayEpochMs, hasTourFinished } from '../utils/dateUtils';
 import { resolveTourPassengerCount } from '../utils/tourPassengerCounts';
 import { buildTourPackCoverage, subscribeToDriverTourPackAdminStatuses } from '../services/driverTourPackAdminStatusService';
 import { buildDriverTourPackOperationsByTour, departureKeyForTour, subscribeToDriverTourPackOperations, updateDriverTourPackIssueStatus } from '../services/driverTourPackOperationsService';
-import { fetchTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
+import { subscribeToTourByExactId, subscribeToDriverDirectory, subscribeToTourWindow } from '../services/adminDirectoryService';
 const db = getAdminDatabase();
 const EMPTY_TOUR_WINDOW = Object.freeze({ tours: {}, atLimit: false, limit: 0, status: 'loading' });
 
@@ -81,10 +81,13 @@ export default function ToursManager() {
   const queryParam = searchParams.get('q') || '';
   const searchTerm = queryParam;
   const activeExactTourMatch = exactTourMatch?.query === queryParam.trim() ? exactTourMatch.match : null;
-  const tours = useMemo(() => activeExactTourMatch ? {
-    ...tourWindowTours,
-    [activeExactTourMatch.tourId]: activeExactTourMatch.tour
-  } : tourWindowTours, [tourWindowTours, activeExactTourMatch]);
+  const tours = useMemo(() => {
+    if (!activeExactTourMatch) return tourWindowTours;
+    const merged = { ...tourWindowTours };
+    if (activeExactTourMatch.tour) merged[activeExactTourMatch.tourId] = activeExactTourMatch.tour;
+    else delete merged[activeExactTourMatch.tourId];
+    return merged;
+  }, [tourWindowTours, activeExactTourMatch]);
 
   // Modal states
   const [createModalOpened, {
@@ -228,12 +231,12 @@ export default function ToursManager() {
       };
     }
     const requestedQuery = queryParam.trim();
-    fetchTourByExactId(db, queryParam).then(match => {
+    const unsubscribe = subscribeToTourByExactId(db, queryParam, match => {
       if (!cancelled) setExactTourMatch({
         query: requestedQuery,
         match
       });
-    }).catch(() => {
+    }, () => {
       if (!cancelled) setExactTourMatch({
         query: requestedQuery,
         match: null
@@ -241,6 +244,7 @@ export default function ToursManager() {
     });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [queryParam]);
 

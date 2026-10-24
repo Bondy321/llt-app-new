@@ -1,0 +1,14 @@
+name: Verified shell Node toolchain
+description: Install checksum-pinned Node without invoking the runner JavaScript action runtime
+inputs:
+  node-version:
+    description: Explicit reviewed Node version (22.23.4 or 24.22.1)
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        LLT_NODE_VERSION: ${{ inputs.node-version }}
+        LLT_ACTION_PATH: ${{ github.action_path }}
+      run: bash "$LLT_ACTION_PATH/bootstrap.sh"

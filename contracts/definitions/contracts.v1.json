@@ -1334,11 +1334,11 @@
       "optionalProperties": [],
       "properties": {
         "schemaVersion": { "type": "integer", "const": 1 },
-        "phase": { "type": "string", "enum": ["compatibility", "server_only"] },
+        "phase": { "type": "string", "enum": ["server_only"] },
         "revision": { "type": "integer", "minimum": 1 },
         "updatedAtMs": { "type": "integer", "minimum": 1 }
       },
-      "enumValues": { "phase": ["compatibility", "server_only"] },
+      "enumValues": { "phase": ["server_only"] },
       "idPatterns": {},
       "maximumLengths": {},
       "numericBounds": { "revision": { "minimum": 1 }, "updatedAtMs": { "minimum": 1 } },
@@ -1354,11 +1354,11 @@
       "optionalProperties": [],
       "properties": {
         "schemaVersion": { "type": "integer", "const": 1 },
-        "phase": { "type": "string", "enum": ["compatibility", "cutover"] },
+        "phase": { "type": "string", "enum": ["cutover"] },
         "projectionRevision": { "type": "integer", "minimum": 1 },
         "updatedAtMs": { "type": "integer", "minimum": 1 }
       },
-      "enumValues": { "phase": ["compatibility", "cutover"] },
+      "enumValues": { "phase": ["cutover"] },
       "idPatterns": {},
       "maximumLengths": {},
       "numericBounds": { "projectionRevision": { "minimum": 1 }, "updatedAtMs": { "minimum": 1 } },

@@ -100,8 +100,9 @@ function createDriverTourPackService({ storage = createPersistenceProvider({ nam
     const scope = normalizeScope(scopeInput); if (!scope.ok) return response(false,null,scope.reason,IDENTITY_ERROR);
     const check = validator(pack); if (!check.valid) return response(false,null,'Driver Tour Pack failed validation',REMOTE_ERROR);
     if (pack.departureKey !== scope.departureKey || pack.tourId !== scope.tourId) return response(false,null,'Pack does not match driver scope','DRIVER_TOUR_PACK_SCOPE_MISMATCH');
-    const key = cacheKey(scope); try { const entry = await withLock(key, async () => {
-      if (expectedGeneration !== null && currentGeneration(key) !== expectedGeneration) return null;
+    const key = cacheKey(scope); const generation = expectedGeneration ?? currentGeneration(key);
+    try { const entry = await withLock(key, async () => {
+      if (currentGeneration(key) !== generation) return null;
       const next = { pack, cachedAtMs };
       await storage.setItemAsync(key, JSON.stringify(next));
       return next;
@@ -109,7 +110,7 @@ function createDriverTourPackService({ storage = createPersistenceProvider({ nam
     if (!entry) return response(false,null,'Driver Tour Pack scope was revoked','DRIVER_TOUR_PACK_SCOPE_REVOKED');
     return response(true,entry); } catch(error) { return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_CACHE_WRITE_FAILED'); }
   };
-  const purge = async (scopeInput) => { const scope=normalizeScope(scopeInput); if(!scope.ok)return response(false,null,scope.reason,IDENTITY_ERROR); const key=cacheKey(scope); try { const generation=await withLock(key,async()=>{const next=revokeGeneration(key);await deleteKey(scope);return next;}); return response(true,{purged:true,generation}); } catch(error){return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_PURGE_FAILED');} };
+  const purge = async (scopeInput) => { const scope=normalizeScope(scopeInput); if(!scope.ok)return response(false,null,scope.reason,IDENTITY_ERROR); const key=cacheKey(scope); const generation=revokeGeneration(key); try { await withLock(key,async()=>{await deleteKey(scope);}); return response(true,{purged:true,generation}); } catch(error){return response(false,null,error?.message || String(error),'DRIVER_TOUR_PACK_PURGE_FAILED');} };
   const fetchRemote = async (scopeInput) => {
     const scope=normalizeScope(scopeInput); const activeDb=database(); if(!scope.ok)return response(false,null,scope.reason,IDENTITY_ERROR); if(!activeDb?.ref)return response(false,null,'Driver Tour Pack database unavailable','DRIVER_TOUR_PACK_DB_UNAVAILABLE');
     const key=cacheKey(scope); const expectedGeneration=currentGeneration(key);

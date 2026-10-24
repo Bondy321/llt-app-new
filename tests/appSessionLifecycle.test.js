@@ -17,8 +17,8 @@ const {
   buildRoleTransitionCleanupUpdates,
 } = require('../functions/src/domains/app-sessions/roleTransition');
 const {
-  issueDriverAppSession,
-  issuePassengerAppSession,
+  issueDriverAppSession: productionIssueDriver,
+  issuePassengerAppSession: productionIssuePassenger,
 } = require('../functions/src/domains/app-sessions/sessionIssuance');
 const {
   derivePassengerAccountDeletionKey,
@@ -30,6 +30,19 @@ const {
   isParticipantBackedByActiveSession,
   parseArgs: parseMigrationArgs,
 } = require('../functions/scripts/migrateAppSessions');
+
+// These unit tests inspect update construction; the emulator suite separately
+// exercises the real restricted SDK connection and server commit predicates.
+const unitIssuer = ({ db }) => ({ db, close: async () => {} });
+const issuePassengerAppSession = options => {
+  const bookingRef = options.bookingRef || 'UNIT-BOOKING';
+  if (!options.bookingRef) options.db.state[`bookings/${bookingRef}`] = { tourId: options.tourId };
+  return productionIssuePassenger({ createIssuer: unitIssuer, ...options,
+    identityUpdates: { ...options.identityUpdates, [`users/${options.authUid}/bookingRef`]: bookingRef } });
+};
+const issueDriverAppSession = options => productionIssueDriver({ createIssuer: unitIssuer,
+  driverLoginPolicyGeneration: 0, staffAuthorization: { generation: 'c'.repeat(48),
+    redemptionId: 'unit-redemption', secretHash: 'd'.repeat(64), installationEpoch: null }, ...options });
 
 const PASSENGER_ID = `pax_v2_${'a'.repeat(32)}`;
 const SESSION_ID = `sess_v1_${'b'.repeat(32)}`;
@@ -79,6 +92,9 @@ const createTransactionDb = (initial = {}, { rootUpdateError = null } = {}) => {
           if (path === '' && rootUpdateError) throw rootUpdateError;
           Object.entries(updates).forEach(([key, value]) => {
             if (value === null) delete state[key]; else state[key] = value;
+            if (key.startsWith('app_session_authority/') && key.endsWith('/state')) {
+              state[key.slice(0, -6)].state = value;
+            }
           });
         },
         push() { return { key: 'event-role-transition' }; },
@@ -121,10 +137,10 @@ test('passenger sessions are opaque, bounded, credential-free and bind schema-v2
 
 test('driver sessions cover assigned and bounded unassigned states with revision validation', () => {
   const nowMs = 1_800_000_000_000;
-  const assigned = buildDriverSessionRecord({
+  const assigned = buildDriverSessionRecord({ driverLoginPolicyGeneration: 0,
     authUid: 'uid-driver', driverId: 'D-1', tourId: 'TOUR_A', sessionId: SESSION_ID, nowMs,
   });
-  const unassigned = buildDriverSessionRecord({
+  const unassigned = buildDriverSessionRecord({ driverLoginPolicyGeneration: 0,
     authUid: 'uid-driver', driverId: 'D-1', tourId: null,
     sessionId: `sess_v1_${'c'.repeat(32)}`, nowMs,
   });
@@ -132,7 +148,7 @@ test('driver sessions cover assigned and bounded unassigned states with revision
   assert.equal(assigned.expiresAtMs, nowMs + (12 * 60 * 60 * 1000));
   assert.equal(unassigned.expiresAtMs, nowMs + (60 * 60 * 1000));
   assert.equal(isActiveSessionRecord({ ...assigned, sessionRevision: 0 }, { nowMs }), false);
-  assert.throws(() => buildDriverSessionRecord({
+  assert.throws(() => buildDriverSessionRecord({ driverLoginPolicyGeneration: 0,
     authUid: 'uid-driver', driverId: 'D/unsafe', tourId: null, sessionId: SESSION_ID, nowMs,
   }), /driver principal/i);
   assert.throws(() => buildPassengerSessionRecord({
@@ -189,11 +205,19 @@ test('active access requires the matching live session and schema-v2 participant
   const participant = buildPassengerParticipantRecord({ session });
   const db = createTransactionDb({
     'app_sessions/uid-p': session,
+    'app_session_authority/uid-p': { schemaVersion: 1, state: 'committed', epoch: 'a'.repeat(48), sessionId: session.sessionId },
     'tours/TOUR_A/participants/uid-p': participant,
     'users/uid-p': { principalType: 'passenger', stablePassengerId: PASSENGER_ID, identityVersion: 'pax_v2', bookingRef: 'BOOK-1' },
     'bookings/BOOK-1': { tourId: 'TOUR_A' },
+    'passenger_identity_security/BOOK-1': { deviceAuthorizationVersion: 2, authorizedAuthUids: { 'uid-p': true }, passengerPrincipalId: PASSENGER_ID },
   });
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).allowed, true);
+  for (const invalidExpiry of [undefined, null, '20000', 'not-a-number', NaN, Infinity, 999, 20000.5]) {
+    db.state['tours/TOUR_A/participants/uid-p'] = { ...participant, sessionExpiresAtMs: invalidExpiry };
+    assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).reason,
+      'PARTICIPANT_SESSION_MISMATCH');
+  }
+  db.state['tours/TOUR_A/participants/uid-p'] = participant;
   delete db.state['app_sessions/uid-p'];
   assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs })).reason, 'SESSION_INACTIVE');
   db.state['app_sessions/uid-p'] = { ...session, expiresAtMs: 999 };
@@ -207,7 +231,9 @@ test('passenger HTTP authority fails closed on incomplete canonical booking or p
   const validProfile = { principalType: 'passenger', stablePassengerId: PASSENGER_ID,
     identityVersion: 'pax_v2', bookingRef: 'BOOK-1' };
   const db = createTransactionDb({ 'app_sessions/uid-p': session,
+    'app_session_authority/uid-p': { schemaVersion: 1, state: 'committed', epoch: 'a'.repeat(48), sessionId: session.sessionId },
     'tours/TOUR_A/participants/uid-p': buildPassengerParticipantRecord({ session }),
+    'passenger_identity_security/BOOK-1': { deviceAuthorizationVersion: 2, authorizedAuthUids: { 'uid-p': true }, passengerPrincipalId: PASSENGER_ID },
     'users/uid-p': validProfile, 'bookings/BOOK-1': { tourId: 'TOUR_A', loginEligible: true } });
   const check = () => verifyActiveAppSession({ db, authUid: 'uid-p', expectedTourId: 'TOUR_A', nowMs });
   assert.equal((await check()).allowed, true);
@@ -216,6 +242,9 @@ test('passenger HTTP authority fails closed on incomplete canonical booking or p
     assert.equal((await check()).reason, 'PASSENGER_PROFILE_MISMATCH');
   }
   db.state['users/uid-p'] = validProfile;
+  db.state['passenger_identity_security/BOOK-1'].loginLocked = true;
+  assert.equal((await check()).reason, 'PASSENGER_AUTHORITY_CHANGED');
+  delete db.state['passenger_identity_security/BOOK-1'].loginLocked;
   for (const booking of [null, [], 'invalid', { tourId: 'TOUR_A', loginEligible: false },
     { tourId: 'TOUR_A', sourceRoster: { state: 'not_in_report' } }]) {
     db.state['bookings/BOOK-1'] = booking;
@@ -240,6 +269,9 @@ test('driver access follows policy generation and applies the scalar claim only 
   });
   const db = createTransactionDb({
     'app_sessions/uid-driver-b': session,
+    'app_session_authority/uid-driver-b': { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: session.sessionId },
+    'driver_staff_policy/D-1': { schemaVersion: 1, generation: 'c'.repeat(48) },
+    'driver_device_authorizations/uid-driver-b': { schemaVersion: 1, state: 'active', driverId: 'D-1', sessionId: session.sessionId, generation: 'c'.repeat(48) },
     'users/uid-driver-b': {
       driverId: 'D-1',
       driverPrincipalId: 'driver:D-1',
@@ -270,10 +302,17 @@ test('driver access follows policy generation and applies the scalar claim only 
     db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
   })).reason, 'DRIVER_PROFILE_MISMATCH');
 
-  db.state['drivers/D-1'] = { authUid: 'uid-driver-b', currentTourId: 'TOUR_A' };
+  db.state['drivers/D-1'] = { authUid: 'uid-driver-b', currentTourId: 'TOUR_A', authUidStaffGeneration: 'c'.repeat(48) };
   assert.equal((await verifyActiveAppSession({
     db, authUid: 'uid-driver-b', expectedTourId: 'TOUR_A', expectedRole: 'driver', nowMs,
   })).allowed, true);
+
+  db.state['driver_assignment_active/v1/D-1'] = false;
+  assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-driver-b', nowMs })).reason, 'DRIVER_ASSIGNMENT_MISMATCH');
+  delete db.state['driver_assignment_active/v1/D-1'];
+  db.state['driver_login_policy/v1'].transitionPhase = 'draining';
+  assert.equal((await verifyActiveAppSession({ db, authUid: 'uid-driver-b', nowMs })).reason, 'DRIVER_POLICY_MISMATCH');
+  delete db.state['driver_login_policy/v1'].transitionPhase;
 
   db.state['driver_login_policy/v1'] = {
     ...db.state['driver_login_policy/v1'],
@@ -339,7 +378,7 @@ test('role transition cleanup clears current driver authority without touching d
 
 test('passenger issuance commits driver cleanup and durable passenger identity in one root update', async () => {
   const nowMs = 1_800_000_000_000;
-  const oldDriverSession = buildDriverSessionRecord({
+  const oldDriverSession = buildDriverSessionRecord({ driverLoginPolicyGeneration: 0,
     authUid: 'uid-role-transition',
     driverId: 'D-ROLE',
     tourId: 'TOUR_OLD',
@@ -443,7 +482,7 @@ test('passenger session replacement removes its exact chat leaves before publish
 
 test('driver replacement preserves an assignment-owned pickup across app-session lifecycle changes', async () => {
   const nowMs = 1_800_000_020_000;
-  const oldSession = buildDriverSessionRecord({
+  const oldSession = buildDriverSessionRecord({ driverLoginPolicyGeneration: 0,
     authUid: 'uid-manual-replace',
     driverId: 'D-MANUAL',
     tourId: 'TOUR_MANUAL',
@@ -734,7 +773,7 @@ test('Firebase-omitted nullable fields remain valid without accepting conflictin
   for (const driverId of ['', false, 0, 'D-1']) assert.equal(isActiveSessionRecord({ ...passenger, driverId }, { nowMs }), false);
   assert.equal(isActiveSessionRecord({ ...passenger, status: 'ended' }, { nowMs }), false);
   assert.equal(isActiveSessionRecord({ ...passenger, expiresAtMs: nowMs }, { nowMs }), false);
-  const driver = buildDriverSessionRecord({ authUid: 'roundtrip-driver', driverId: 'D-1', sessionId: SESSION_ID, nowMs });
+  const driver = buildDriverSessionRecord({ driverLoginPolicyGeneration: 0, authUid: 'roundtrip-driver', driverId: 'D-1', sessionId: SESSION_ID, nowMs });
   delete driver.tourId;
   assert.equal(isActiveSessionRecord(driver, { nowMs }), true);
   for (const tourId of ['', false, 0]) assert.equal(isActiveSessionRecord({ ...driver, tourId }, { nowMs }), false);

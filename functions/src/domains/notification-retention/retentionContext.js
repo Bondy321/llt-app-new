@@ -109,7 +109,7 @@ const installOrReclaimCanonicalFence = async ({
   let missing = false;
   let reason = 'canonical_changed';
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (current) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (current) => {
     if (!current) {
       missing = true;
       reason = 'canonical_missing';
@@ -176,7 +176,7 @@ const installOrReclaimCanonicalFence = async ({
 const abandonMissingCanonicalRetention = async ({
   db, jobId, queueKey, entry, state, ownerId, metrics,
 }) => {
-  const parent = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const parent = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parent) return false;
   let removed = false;
@@ -395,13 +395,13 @@ const verifyAndRenewFence = async ({ context, nowMs, metrics, leaseMs = context.
   const state = await renewStateLease({ context, nowMs, metrics, leaseMs });
   if (!state) return false;
   if (context.canonicalDeleted) {
-    const parent = (await context.db.ref(`notification_jobs/${context.jobId}`).once('value')).val();
+    const parent = (await context.db.ref(`notification_jobs_v2/${context.jobId}`).once('value')).val();
     metrics.queries += 1;
     return !parent && state.phase === 'finalize';
   }
   let renewedJob = null;
   const result = await transactionWithAuthoritativeExistingValue(
-    context.db.ref(`notification_jobs/${context.jobId}`), (current) => {
+    context.db.ref(`notification_jobs_v2/${context.jobId}`), (current) => {
     if (!jobMatchesState(current, state, context.jobId)
       || !ownsExactFence(current, state, context.fenceId)) return undefined;
     renewedJob = {
@@ -437,7 +437,7 @@ const transitionStatePhase = async ({ context, expectedPhase, nextPhase, nowMs, 
     context.state = next;
     if (!context.canonicalDeleted) {
       await transactionWithAuthoritativeExistingValue(
-        context.db.ref(`notification_jobs/${context.jobId}`), (current) => {
+        context.db.ref(`notification_jobs_v2/${context.jobId}`), (current) => {
         if (!jobMatchesState(current, next, context.jobId)
           || !ownsExactFence(current, next, context.fenceId)) return undefined;
         return {
@@ -486,7 +486,7 @@ const commitIrreversibleWork = async ({ context, nowMs, deleted = 0, metrics }) 
   context.state = committedState;
   if (!context.canonicalDeleted) {
     await transactionWithAuthoritativeExistingValue(
-      context.db.ref(`notification_jobs/${context.jobId}`), (current) => {
+      context.db.ref(`notification_jobs_v2/${context.jobId}`), (current) => {
       if (!jobMatchesState(current, committedState, context.jobId)
         || !ownsExactFence(current, committedState, context.fenceId)) return undefined;
       return {

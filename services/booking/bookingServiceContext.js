@@ -13,6 +13,7 @@ let getCurrentAppCheckToken;
 let maskIdentifier = (value) => value;
 let loginDiagnosticsService = null;
 const { loadOptionalService } = require('../optionalServiceLoader');
+const { boundedNetworkDecision } = require('../boundedNetworkDecision');
 const { normalizeTourId, resolveTourId } = require('../tourIdentityService');
 const {
   PASSENGER_IDENTITY_VERSION,
@@ -202,20 +203,40 @@ const buildLoginVerifierEndpointCandidates = ({
 const getPassengerLoginVerifierTimeoutMs = () => {
   const configured = Number(process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured >= 1000) {
-    return configured;
+    return Math.min(configured, 30000);
   }
 
   return 10000;
 };
 
-const fetchWithTimeout = async (endpoint, options = {}, timeoutMs = getPassengerLoginVerifierTimeoutMs()) => {
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(endpoint, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timeoutHandle);
+// The deadline covers headers AND body consumption, even when a transport ignores abort.
+const fetchJsonWithTimeout = async (endpoint, options = {}, timeoutMs = getPassengerLoginVerifierTimeoutMs()) => {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw Object.assign(new Error('Request timed out'), { name: 'AbortError' });
   }
+  const controller = new AbortController();
+  const requestUser = auth?.currentUser;
+  const assertCurrentUser = () => {
+    if (auth?.currentUser !== requestUser) throw Object.assign(new Error('Installation changed'), { code: 'AUTH_USER_CHANGED' });
+  };
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(endpoint, { ...options, signal: controller.signal });
+        assertCurrentUser();
+        const payload = await response.json().catch(() => null);
+        assertCurrentUser();
+        return { response, payload };
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(Object.assign(new Error('Request timed out'), { name: 'AbortError' }));
+        }, Math.max(1, Math.min(timeoutMs, 30000)));
+      }),
+    ]);
+  } finally { clearTimeout(timer); controller.abort(); }
 };
 
 const LOGIN_REALTIME_READ_RETRY_ATTEMPTS = 3;
@@ -253,7 +274,7 @@ const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const attemptStartedAt = Date.now();
     try {
-      const snapshot = await ref.once('value');
+      const snapshot = await boundedNetworkDecision(() => ref.once('value'));
       recordLoginDiagnostic('rtdb_read_succeeded', {
         label,
         attempt,
@@ -311,7 +332,7 @@ const readRealtimeSnapshotWithLoginRetry = async (ref, { label, attempts = LOGIN
 };
 
 const shouldUseAppCheckForPassengerVerifier = () => {
-  // Disabled by default until App Check rollout is explicitly enabled.
+  // Production/TestFlight configuration requires this provider; local tests may omit it.
   return process.env.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK === 'true';
 };
 
@@ -326,7 +347,7 @@ const getAppCheckHeaderValue = async () => {
   }
 
   try {
-    const token = await getCurrentAppCheckToken();
+    const token = await boundedNetworkDecision(() => getCurrentAppCheckToken());
     if (typeof token === 'string' && token.trim()) {
       return { success: true, token: token.trim() };
     }
@@ -364,9 +385,13 @@ const getFirebaseAuthHeaderValue = async () => {
   }
 
   try {
-    const token = await currentUser.getIdToken();
+    const [token, appCheckResult] = await boundedNetworkDecision(() => Promise.all([
+      currentUser.getIdToken(), getAppCheckHeaderValue(),
+    ]));
+    if (!appCheckResult.success && shouldRequireAppCheckForPassengerVerifier()) return { success: false, reason: 'APPCHECK_TOKEN_UNAVAILABLE', appCheckResult };
+    if (auth?.currentUser !== currentUser) return { success: false, reason: 'AUTH_USER_CHANGED' };
     if (typeof token === 'string' && token.trim()) {
-      return { success: true, token: token.trim() };
+      return { success: true, token: token.trim(), appCheck: appCheckResult.success ? appCheckResult.token : null, appCheckResult };
     }
 
     return { success: false, reason: 'AUTH_TOKEN_UNAVAILABLE' };
@@ -424,15 +449,15 @@ const fetchTourManifestFromFunction = async (tourCodeOriginal) => {
   const headers = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${firebaseAuthResult.token}`,
+    ...(firebaseAuthResult.appCheck ? { 'X-Firebase-AppCheck': firebaseAuthResult.appCheck } : {}),
   };
 
   for (const endpoint of endpointCandidates) {
-    const response = await fetchWithTimeout(endpoint, {
+    const { response, payload } = await fetchJsonWithTimeout(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({ tourId: tourCodeOriginal }),
     });
-    const payload = await response.json().catch(() => null);
 
     if (!payload) {
       if (response.status === 404) {
@@ -474,7 +499,7 @@ module.exports = {
   buildLoginVerifierEndpointCandidates,
   buildPassengerLoginVerifierUrl,
   fetchTourManifestFromFunction,
-  fetchWithTimeout,
+  fetchJsonWithTimeout,
   getAppCheckHeaderValue,
   getCurrentAppCheckToken,
   getFirebaseAuthHeaderValue,

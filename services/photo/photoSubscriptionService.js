@@ -4,6 +4,7 @@ const {
   limitToLast,
   logPhotoDbEvent,
   mapSnapshotToPhotos,
+  isVisiblePhotoRecord,
   onValue,
   orderByChild,
   query,
@@ -63,7 +64,7 @@ const subscribeToTourPhotos = (
     const unsubscribe = onValueFn(photosQuery, (snapshot) => {
       const currentGeneration = ++generation;
       try {
-        let photos = mapSnapshotToPhotos(snapshot);
+        let photos = mapSnapshotToPhotos(snapshot).filter(isVisiblePhotoRecord);
         sortPhotosDescending(photos);
         const safePhotos = photos.map((photo) => {
           const { sourceUrl: _sourceUrl, viewerUrl: _viewerUrl, thumbnailUrl: _thumbnailUrl, ...safePhoto } = photo;
@@ -199,7 +200,7 @@ const subscribeToPrivatePhotos = (
     const unsubscribe = onValueFn(photosQuery, async (snapshot) => {
       const currentGeneration = ++generation;
       try {
-        let photos = mapSnapshotToPhotos(snapshot, { ownerScope });
+        let photos = mapSnapshotToPhotos(snapshot, { ownerScope }).filter(isVisiblePhotoRecord);
         sortPhotosDescending(photos);
         photos = await resolvePrivatePhotoMediaFn({ tourId, ownerKey: ownerScopeKey, photos });
         if (currentGeneration !== generation) return;

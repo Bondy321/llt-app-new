@@ -25,9 +25,9 @@ its own revoked, expired or missing session still follows the normal invalid-ses
 ## Public protocol
 
 All three endpoints are authenticated HTTPS `POST` Functions in `europe-west1`, with CORS disabled.
-They accept exact-key JSON objects and reject unknown properties. They reuse the existing
-group-media/session App Check gate controlled by `REQUIRE_APP_CHECK_FOR_GROUP_MEDIA` (and the shared
-login requirement); the absence of an App Check token never expands authority.
+They accept exact-key JSON objects and reject unknown properties. Production admission requires
+valid Firebase Auth and App Check through the shared request boundary, regardless of an obsolete
+false rollout flag; the absence of an App Check token never expands authority.
 
 ### Request deletion
 
@@ -45,17 +45,18 @@ The receipt is 32 bytes of cryptographically secure random data generated and du
 network I/O. The server derives `deletionId = acctdel_v1_<sha256(receipt with domain separator)>`; the
 receipt itself is never stored in RTDB or logs.
 
-The Function requires the authenticated UID to own the exact active, non-expired session. It derives:
+The Function requires the authenticated UID to own the exact active, non-expired session and matching
+committed installation authority epoch. It derives:
 
 - Passenger: opaque principal, tour, booking reference, stable identity/key and private-photo owner
   from the session, profile, security record and exact identity binding. The security record must
-  authorize this exact UID through `authorizedAuthUids/{uid}: true` when
-  `deviceAuthorizationVersion: 2`, or the legacy `authorizedAuthUid` scalar only when the version is
-  absent/null. The record must not be login-locked and must name the same opaque principal. An unknown
+  authorize this exact UID through `authorizedAuthUids/{uid}: true` with
+  `deviceAuthorizationVersion: 2`. Scalar ownership is not supported authority. The record must not
+  be login-locked and must name the same opaque principal. An absent or unknown
   version, a sibling's authorization, a truthy non-boolean map value or a missing exact identity binding
   is insufficient. A retained legacy scalar cannot restore a device removed from a version-2 map.
-- Driver: canonical `driver:{driverId}` principal, driver record and optional current tour from the
-  session/profile/driver records.
+- Driver: canonical `driver:{driverId}` principal, current staff-device approval/policy generation,
+  driver record and optional current tour from the session/profile/driver records.
 
 Any missing, stale, ambiguous or contradictory authority fails before reservation. A different current
 session returns `SESSION_CHANGED`. An active deletion returns the existing operation only when it is
@@ -329,24 +330,21 @@ of deleting a successor object.
 ```json
 {
   "schemaVersion": 1,
-  "phase": "compatibility",
+  "phase": "server_only",
   "revision": 1,
   "updatedAtMs": 123
 }
 ```
 
-- Missing record: `compatibility`.
-- Exact valid `compatibility`: new workflow enabled while temporary legacy account-deletion rules
-  remain available to older clients.
-- Malformed, unknown schema, unknown phase or partial record: fail closed.
-- Exact valid `server_only`: reserved for a separately reviewed cutover that denies the legacy direct
-  deletion permissions. It is not enabled or implied by this implementation.
+- Missing record: `server_only`.
+- Exact valid `server_only`: the sole supported first-launch deletion contract.
+- Explicit `compatibility`, malformed, unknown schema, unknown phase or partial record: fail closed.
 
-The later `server_only` rules deny only the old client-orchestrated whole-user/log deletion and exact
+The `server_only` rules deny the old client-orchestrated whole-user/log deletion and exact
 account-deletion deletes for passenger identity/security and driver `authUid`. They continue to allow
 the independently authorised normal-feature leaf writes for logs, profile preferences/device state,
 chat/reactions, read state, live state and captions. Database and Storage paths already owned solely by
-Admin Functions remain private in both phases.
+Admin Functions remain private. There is no supported older-client deletion phase.
 
 ## Atomic reservation and ordering
 

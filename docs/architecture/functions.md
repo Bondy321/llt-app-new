@@ -1,7 +1,7 @@
 # Firebase Functions architecture
 
 Notification producers retain their deployed export names but only persist deterministic records in
-`notification_jobs`. `processNotificationDeliveryJob` is the sole Expo send boundary;
+`notification_jobs_v2`. `processNotificationDeliveryJob` is the sole Expo send boundary;
 `recoverNotificationDeliveryJobs` resumes stranded leases, `processNotificationReceipts` owns Expo
 receipt reconciliation, and `cleanupNotificationDeliveryData` applies bounded retention. See ADR
 0007 and `docs/data-contracts/notification-delivery.md` before modifying a notification producer.
@@ -42,6 +42,13 @@ and bounded audit events. Browser code may read revisions for optimistic input b
 must never calculate or directly write assignment authority.
 
 Firebase Admin initialization is centralized. `sharp` is isolated to `infrastructure/storage/mediaProcessor.js`; `expo-server-sdk` is isolated to notification infrastructure. Importing the composition root must not eagerly load either package.
+
+`cleanupPendingMediaUploads` drains at most 25 due upload operations every five
+minutes. Upload metadata remains hidden until the exact current authority and
+record lease pass a rules-mediated commit. Cancelled uploads retain a zero-byte
+Storage sentinel and private operation tombstone: generation-zero late writes
+cannot recreate customer bytes. Completed media follows normal generation-matched
+deletion. This cleanup queue is operational recovery state, not disposable cache.
 
 To add a Function:
 

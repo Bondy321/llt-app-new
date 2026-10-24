@@ -72,5 +72,8 @@ Node patch and changes combined with mobile JavaScript. This prevents a tooling
 security fix from publishing pending mobile changes automatically.
 
 The SDK-local Expo CLI is locked through `package-lock.json`; release workflows pin EAS CLI to
-`22.6.0` in `eas.json` and every release workflow. App Check remains intentionally
-disabled: all reviewed client/backend release flags stay explicitly `false`.
+`22.6.0` in `eas.json` and every release workflow. The 1.1.0 production and
+TestFlight contracts require native App Check and enabled passenger snapshots.
+Provider registration and matching native binaries must be verified before
+deployment; disabled protection cannot satisfy the release validator. See the
+[first-public-launch checklist](operations/first-public-launch-2026-10-24.md).

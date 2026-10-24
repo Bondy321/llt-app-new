@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`driver_login_policy/v1` controls whether one driver code may have one current handset or several. The policy is server-owned, client-unreadable, and defaults to multiple handsets when the record does not yet exist.
+`driver_login_policy/v1` controls whether one driver may have one independently approved current handset or several. The policy is server-owned and client-unreadable. The admin API can describe a missing policy as an OFF configuration default, but missing policy or session generations never grant current access.
 
 ```json
 {
@@ -15,7 +15,7 @@
 }
 ```
 
-The API can report a missing record as the compatibility default
+The API can report a missing record as the configuration default
 `enforceSingleDevice: false`, generation/revision zero. Before acquiring a login
 admission, `verifyDriverLogin` transactionally materialises an explicit
 generation-zero OFF record with revision one. Driver-only writes require that
@@ -25,7 +25,7 @@ create, change, or delete the policy.
 
 ## Authority
 
-Every driver request still requires a current server-issued app session, matching Auth UID, driver principal and user profile, current tour assignment, and an unexpired session. Turning the policy off removes only the legacy scalar-claim requirement; it does not weaken any session or tour check.
+Every driver request still requires a current server-issued app session, committed installation epoch, matching active staff-device approval and staff-policy generation, Auth UID, driver principal and user profile, current tour assignment, and an unexpired session. Turning the policy off removes only the single-device scalar-claim requirement; it never removes staff enrolment or any session/tour check. A public driver ID is not a credential.
 
 Driver sessions carry server-only `driverLoginPolicyGeneration`. Rules and
 Functions require it to equal the current materialised policy generation.
@@ -34,7 +34,7 @@ When enforcement is off, operational notifications fan out to every active, curr
 
 ## Changes
 
-The web-admin Settings screen calls `getDriverLoginPolicy` and `setDriverLoginPolicy`. Both endpoints require an authenticated operations admin and use optimistic `expectedRevision` comparison.
+The web-admin Settings screen calls `getDriverLoginPolicy` and `setDriverLoginPolicy`. Both endpoints require production App Check and an authenticated TOTP operations admin; mutation uses optimistic `expectedRevision` comparison.
 
 Normal logins do not use a repository-wide mutex. A short admission is created in
 the policy transaction. With enforcement off, unrelated drivers and two UIDs for

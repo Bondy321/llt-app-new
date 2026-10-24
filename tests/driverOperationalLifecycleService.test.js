@@ -27,7 +27,7 @@ test('normalizes one exact canonical driver, departure and queue scope', () => {
   });
 });
 
-test('purge removes every exact operational cache and queued action after stopping replay', async () => {
+test('explicit deletion removes every exact operational cache and queued action after stopping replay', async () => {
   const calls = [];
   const service = createDriverOperationalLifecycleService({
     driverPacks: {
@@ -49,7 +49,7 @@ test('purge removes every exact operational cache and queued action after stoppi
     driverId: 'D-ONE',
     tourId: '5001D_1',
     departureKey: '2026-08-20::5001D_1',
-  });
+  }, { purgeQueuedActions: true });
 
   assert.equal(result.success, true);
   assert.equal(calls.length, 5);
@@ -77,4 +77,18 @@ test('purge remains fail-closed and reports partial storage failures', async () 
   assert.equal(result.success, false);
   assert.deepEqual(result.failures, [{ name: 'manifest', error: 'disk unavailable' }]);
   assert.equal((await service.purge({ driverId: 'invalid', tourId: 'TOUR_1' })).success, false);
+});
+
+
+test('ordinary logout and reassignment retain scoped unsent actions', async () => {
+  let removed = false;
+  const service = createDriverOperationalLifecycleService({
+    driverPacks: { purge: async () => ({ success: true }) },
+    driverActions: { purge: async () => ({ success: true }) },
+    manifests: { purge: async () => ({ success: true }) },
+    offline: { setActiveSessionScope: async () => {}, purgeTourPack: async () => ({ success: true }),
+      purgeActionsForScope: async () => { removed = true; return { success: true }; } },
+  });
+  assert.equal((await service.purge({ authUid: 'phone', driverId: 'D-ONE', tourId: 'TOUR_A' })).success, true);
+  assert.equal(removed, false);
 });

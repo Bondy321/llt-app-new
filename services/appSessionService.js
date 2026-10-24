@@ -2,6 +2,8 @@ const NativeAsyncStorage = require('@react-native-async-storage/async-storage').
 const { projectValidatedAppSession } = require('../src/app/session/appSessionBoundary');
 const { parseValidatedJson } = require('../src/shared/persistence/jsonBoundary');
 const { classifySessionTransition } = require('./appSessionTransition');
+const { CLEANUP_KEY, serializeLocalSessionWrite, openLocalSessionWrites, localSessionWritesBlocked } = require('./localSessionWriteBoundary');
+const { boundedNetworkDecision } = require('./boundedNetworkDecision');
 
 const testStorageValues = new Map();
 const testStorage = {
@@ -129,12 +131,7 @@ const createAppSessionService = ({
   getFirebase = () => require('../firebase'),
 } = {}) => {
   let endInFlight = null;
-  let storageMutation = Promise.resolve();
-  const mutateStorage = (operation) => {
-    const result = storageMutation.catch(() => {}).then(operation);
-    storageMutation = result;
-    return result;
-  };
+  const mutateStorage = (operation) => serializeLocalSessionWrite(storage, operation);
   const endRequestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
     ? Math.min(requestTimeoutMs, 60_000) : 15_000;
 
@@ -143,6 +140,16 @@ const createAppSessionService = ({
     if (!valid) throw new Error('The server returned an invalid or expired app session.');
     const committed = await mutateStorage(async () => {
       if (!isCurrent()) return false;
+      const cleanupRaw = await storage.getItem(CLEANUP_KEY);
+      if (!cleanupRaw && localSessionWritesBlocked(storage)) return false;
+      if (cleanupRaw) {
+        let cleanup;
+        try { cleanup = JSON.parse(cleanupRaw); } catch { return false; }
+        if (cleanup.state !== 'complete') return false;
+        await storage.removeItem(CLEANUP_KEY);
+      }
+      if (!isCurrent()) return false;
+      openLocalSessionWrites(storage);
       await storage.setItem(APP_SESSION_KEY, JSON.stringify(valid));
       return true;
     });
@@ -151,6 +158,7 @@ const createAppSessionService = ({
   };
 
   const readSession = ({ allowExpired = false } = {}) => mutateStorage(async () => {
+    if (!allowExpired && await storage.getItem(CLEANUP_KEY)) return null;
     const raw = await storage.getItem(APP_SESSION_KEY);
     const parsed = parseValidatedJson(raw, validateAppSession, { nowMs: now(), allowExpired });
     if (!parsed && raw) await storage.removeItem(APP_SESSION_KEY);
@@ -163,6 +171,7 @@ const createAppSessionService = ({
   // serialized adapter used by login/logout. A delayed assignment may neither
   // replace a newer revision nor recreate a session removed by logout.
   const persistSessionTransition = ({ expectedSession, session, projectionEntries, isCurrent }) => mutateStorage(async () => {
+    if (await storage.getItem(CLEANUP_KEY)) return false;
     const next = validateAppSession(session, { nowMs: now() });
     const stored = parseValidatedJson(await storage.getItem(APP_SESSION_KEY), validateAppSession,
       { nowMs: now(), allowExpired: true });
@@ -174,6 +183,7 @@ const createAppSessionService = ({
   });
 
   const persistProjection = ({ expectedSession, entries, isCurrent }) => mutateStorage(async () => {
+    if (await storage.getItem(CLEANUP_KEY)) return false;
     const stored = parseValidatedJson(await storage.getItem(APP_SESSION_KEY), validateAppSession, { nowMs: now() });
     if (!stored || !isCurrent() || classifySessionTransition(expectedSession, stored) !== 'duplicate') return false;
     await storage.multiSet(entries);
@@ -273,11 +283,11 @@ const createAppSessionService = ({
     return true;
   });
 
-  const verifyCurrent = async ({ authUid, expectedSession, readRemoteSession, allowDriverAssignment = false } = {}) => {
+  const verifyCurrent = async ({ authUid, expectedSession, readRemoteSession, allowDriverAssignment = false, timeoutMs } = {}) => {
     if (!isSafeKey(authUid) || !expectedSession) return { valid: false, reason: 'INVALID_INPUT' };
-    const raw = readRemoteSession
+    const raw = await boundedNetworkDecision(async () => readRemoteSession
       ? await readRemoteSession(authUid)
-      : (await getFirebase().realtimeDb.ref(`app_sessions/${authUid}`).once('value')).val();
+      : (await getFirebase().realtimeDb.ref(`app_sessions/${authUid}`).once('value')).val(), timeoutMs);
     const remote = validateAppSession(raw, { nowMs: now() });
     if (!remote || (raw.authUid && raw.authUid !== authUid)) return { valid: false, reason: 'SESSION_INACTIVE' };
     if (allowDriverAssignment) {

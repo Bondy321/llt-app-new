@@ -204,6 +204,10 @@ const enumerateNotificationAudiencePage = async ({
 }) => {
   const indexedCursor = decodeIndexedCursor(cursor);
   if (indexedCursor) return loadIndexedAudiencePage({ db, job, after: indexedCursor.after, pageSize, metrics });
+  if (job.audienceContract === 'indexed_v1') {
+    if (cursor) throw new Error('Unsupported launch audience cursor');
+    return loadIndexedAudiencePage({ db, job, after: null, pageSize, metrics });
+  }
   const shadowCursor = decodeShadowCursor(cursor);
   if (shadowCursor !== null) return loadShadowAudiencePage({ db, job, state: shadowCursor, pageSize, metrics });
   if (cursor) return { ...(await loadNotificationAudiencePage(db, cursor, pageSize)), rolloutPhase: 'legacy_scan', source: 'legacy' };

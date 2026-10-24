@@ -41,6 +41,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
   const { height, logoHeight, logoWidth, responsiveStyles } = useLoginResponsiveLayout();
   const [bookingReference, setBookingReference] = useState('');
   const [email, setEmail] = useState('');
+  const [enrolmentSecret, setEnrolmentSecret] = useState('');
   const [errorState, setErrorState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [modeHintFocus, setModeHintFocus] = useState(null);
@@ -329,6 +330,7 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
         },
       }, loginDiagnosticContext);
       const result = await validateBookingReference(trimmedReference, normalizedEmail, {
+        enrolmentSecret: enrolmentSecret.trim(),
         loginDiagnostics: loginDiagnosticContext,
       });
       await loginDiagnostics.recordLoginDiagnostic('online_validation_call_returned', {
@@ -423,6 +425,8 @@ export default function LoginScreen({ onLoginSuccess, logger, isConnected, resol
       bookingReference={bookingReference}
       buttonAnimation={buttonAnimation}
       clearErrorState={clearErrorState}
+      enrolmentSecret={enrolmentSecret}
+      setEnrolmentSecret={setEnrolmentSecret}
       email={email}
       emailVisible={emailVisible}
       errorState={errorState}

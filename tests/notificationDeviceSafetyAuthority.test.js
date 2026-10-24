@@ -10,12 +10,18 @@ process.env.FIREBASE_CONFIG = JSON.stringify({
 
 const {
   readSafetyAlertDetail,
-  updateNotificationDevice,
+  deleteNotificationAccountState,
+  updateNotificationDevice: productionUpdateNotificationDevice,
   updateSafetyAlertStatus,
 } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const {
   buildAppSessionCleanupUpdates,
 } = require('../functions/lib/appSessionCleanup');
+
+// Explicit local adapter for decision tests. Server-commit security is exercised
+// with actual restricted Firebase connections in notificationOwnership.emulator.
+const createPublisher = ({ db }) => ({ db, close: async () => {} });
+const updateNotificationDevice = options => productionUpdateNotificationDevice({ createPublisher, ...options });
 
 const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const parts = (path) => String(path || '').split('/').filter(Boolean);
@@ -38,6 +44,23 @@ const snapshot = (value) => ({
 });
 const memoryDb = (initial = {}) => {
   const data = clone(initial);
+  require('./helpers/seedNotificationPassengerAuthority').seedNotificationPassengerAuthority(data);
+  data.app_session_authority ||= {};
+  for (const [uid, session] of Object.entries(data.app_sessions || {})) {
+    data.app_session_authority[uid] ||= { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: session.sessionId };
+    if (session.principalType === 'driver') {
+      data.driver_staff_policy ||= {}; data.driver_device_authorizations ||= {};
+      data.driver_staff_policy[session.driverId] = { schemaVersion: 1, generation: 'a'.repeat(48) };
+      data.driver_device_authorizations[uid] = { schemaVersion: 1, state: 'active', driverId: session.driverId, sessionId: session.sessionId, generation: 'a'.repeat(48) };
+    }
+    if (session.principalType === 'passenger') {
+      data.users ||= {}; data.users[uid] ||= {}; data.bookings ||= {};
+      const bookingRef = data.users[uid].bookingRef || `SYNTHETIC-${uid}`;
+      data.users[uid].bookingRef = bookingRef;
+      data.bookings[bookingRef] ||= { tourId: session.tourId };
+    }
+  }
+
   return {
     data,
     ref(path = '') {
@@ -90,6 +113,7 @@ const device = (overrides = {}) => ({
   permissionState: 'granted',
   operationalEligible: true,
   operationalTourId: session.tourId,
+  authoritySessionId: session.sessionId,
   operationalSessionId: session.sessionId,
   operationalSessionRevision: session.sessionRevision,
   marketingEligible: true,
@@ -98,6 +122,19 @@ const device = (overrides = {}) => ({
   createdAtMs: nowMs - 5_000,
   updatedAtMs: nowMs - 1_000,
   ...overrides,
+});
+
+test('a transferred passenger booking cannot prepare a notification publication for the old tour', async () => {
+  const db = memoryDb({ app_sessions: { [session.authUid]: session },
+    users: { [session.authUid]: { bookingRef: 'TRANSFERRED' } },
+    bookings: { TRANSFERRED: { tourId: 'OTHER_TOUR' } },
+    notification_devices: { [session.authUid]: device() } });
+  const before = clone(db.data.notification_devices);
+  const result = await updateNotificationDevice({ db, authUid: session.authUid, nowMs,
+    input: { action: 'reconcile', appSessionId: session.sessionId, pushToken: token, permissionState: 'granted' } });
+  assert.equal(result.body.ignored, true);
+  assert.deepEqual(db.data.notification_devices, before);
+  assert.equal(db.data.notification_mutation_authority, undefined);
 });
 
 test('explicit null token is authoritative and cannot retain operational eligibility', async () => {
@@ -185,9 +222,7 @@ test('account deletion leaves a permanent server tombstone that blocks delayed r
     app_sessions: { [session.authUid]: session },
     notification_devices: { [session.authUid]: device() },
   });
-  const deleted = await updateNotificationDevice({
-    db, authUid: session.authUid, nowMs, input: { action: 'delete', registrationRevision: 6 },
-  });
+  const deleted = await deleteNotificationAccountState({ db, authUid: session.authUid, nowMs });
   assert.equal(deleted.body.deleted, true);
   assert.equal(db.data.notification_devices?.[session.authUid], undefined);
   assert.equal(db.data.notification_device_tombstones[session.authUid].permanent, true);
@@ -210,7 +245,7 @@ test('security revoke clears the token and both operational and marketing delive
     db,
     authUid: session.authUid,
     nowMs,
-    input: { action: 'security_revoke', registrationRevision: 6 },
+    input: { action: 'security_revoke', appSessionId: session.sessionId, registrationRevision: 6 },
   });
   assert.equal(result.status, 200);
   const revoked = db.data.notification_devices[session.authUid];
@@ -276,7 +311,7 @@ test('safety transitions update every existing mirror atomically and reject regr
     logs: { 'passenger-1': { safety: { event_1: alert } } },
   });
   const acknowledged = await updateSafetyAlertStatus({
-    db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_1', action: 'acknowledge', notes: 'Responder assigned', nowMs,
+    db, authUid: adminUid, claims: { firebase: { sign_in_second_factor: 'totp' } }, tourId: 'TOUR_1', eventId: 'event_1', action: 'acknowledge', notes: 'Responder assigned', nowMs,
   });
   assert.equal(acknowledged.status, 200);
   const copies = [
@@ -290,10 +325,10 @@ test('safety transitions update every existing mirror atomically and reject regr
   ));
 
   await updateSafetyAlertStatus({
-    db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_1', action: 'start_response', nowMs: nowMs + 1,
+    db, authUid: adminUid, claims: { firebase: { sign_in_second_factor: 'totp' } }, tourId: 'TOUR_1', eventId: 'event_1', action: 'start_response', nowMs: nowMs + 1,
   });
   const regression = await updateSafetyAlertStatus({
-    db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_1', action: 'acknowledge', nowMs: nowMs + 2,
+    db, authUid: adminUid, claims: { firebase: { sign_in_second_factor: 'totp' } }, tourId: 'TOUR_1', eventId: 'event_1', action: 'acknowledge', nowMs: nowMs + 2,
   });
   assert.equal(regression.status, 409);
   assert.equal(regression.body.reason, 'INVALID_TRANSITION');
@@ -318,12 +353,12 @@ test('escalated safety alerts can enter active response but cannot regress to ac
     tours: { TOUR_1: { safetyAlerts: { event_2: alert } } },
   });
   const started = await updateSafetyAlertStatus({
-    db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_2', action: 'start_response', nowMs,
+    db, authUid: adminUid, claims: { firebase: { sign_in_second_factor: 'totp' } }, tourId: 'TOUR_1', eventId: 'event_2', action: 'start_response', nowMs,
   });
   assert.equal(started.status, 200);
   assert.equal(db.data.tours.TOUR_1.safetyAlerts.event_2.status, 'in_progress');
   const regression = await updateSafetyAlertStatus({
-    db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_2', action: 'acknowledge', nowMs: nowMs + 1,
+    db, authUid: adminUid, claims: { firebase: { sign_in_second_factor: 'totp' } }, tourId: 'TOUR_1', eventId: 'event_2', action: 'acknowledge', nowMs: nowMs + 1,
   });
   assert.equal(regression.status, 409);
 });
@@ -365,7 +400,7 @@ test('safety detail authorizes sessionless operations and current assigned drive
     tour_manifests: { TOUR_1: { assigned_drivers: { D1: true } } },
     tours: { TOUR_1: { safetyAlerts: { event_1: { status: 'pending', message: 'Summary' } } } },
   });
-  assert.equal((await readSafetyAlertDetail({ db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_1' })).status, 200);
+  assert.equal((await readSafetyAlertDetail({ db, authUid: adminUid, tourId: 'TOUR_1', eventId: 'event_1', claims: { firebase: { sign_in_second_factor: 'totp' } } })).status, 200);
   assert.equal((await readSafetyAlertDetail({ db, authUid: driverUid, tourId: 'TOUR_1', eventId: 'event_1' })).status, 200);
   assert.equal((await readSafetyAlertDetail({ db, authUid: session.authUid, tourId: 'TOUR_1', eventId: 'event_1' })).status, 403);
   db.data.tour_manifests.TOUR_1.assigned_drivers.D1 = false;

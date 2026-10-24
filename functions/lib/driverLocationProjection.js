@@ -113,7 +113,10 @@ function snapshotValue(snapshot) {
 }
 
 async function readValue(ref) {
-  const snapshot = typeof ref?.get === 'function' ? await ref.get() : await ref.once('value');
+  // Use the listener-backed read consistently with session authority checks.
+  // Mixing concurrent get() and once() for the same cold Admin SDK path can
+  // corrupt its listener bookkeeping (duplicate-listen assertion).
+  const snapshot = typeof ref?.once === 'function' ? await ref.once('value') : await ref.get();
   return snapshotValue(snapshot);
 }
 
@@ -127,13 +130,15 @@ async function readLiveSources(database, tourId) {
 }
 
 async function hasCurrentDriverAuthority(database, record, nowMs) {
-  const [session, user, policy, driver, assigned, activeTrackingIntent] = await Promise.all([
+  const [session, user, policy, driver, assigned, activeTrackingIntent, assignmentTransition, staffPolicy] = await Promise.all([
     readValue(database.ref(`app_sessions/${record.authUid}`)),
     readValue(database.ref(`users/${record.authUid}`)),
     readValue(database.ref('driver_login_policy/v1')),
     readValue(database.ref(`drivers/${record.driverId}`)),
     readValue(database.ref(`tour_manifests/${record.tourId}/assigned_drivers/${record.driverId}`)),
     hasActiveTrackingIntent(database, record, nowMs),
+    readValue(database.ref(`driver_assignment_active/v1/${record.driverId}`)),
+    readValue(database.ref(`driver_staff_policy/${record.driverId}`)),
   ]);
   const validPolicy = Boolean(
     isObject(policy)
@@ -141,14 +146,20 @@ async function hasCurrentDriverAuthority(database, record, nowMs) {
     && typeof policy.enforceSingleDevice === 'boolean'
     && Number.isSafeInteger(policy.generation)
     && policy.generation >= 0
+    && Number.isSafeInteger(policy.revision) && policy.revision > 0
+    && Number.isSafeInteger(policy.updatedAtMs) && policy.updatedAtMs > 0
+    && (policy.transitionPhase === undefined || policy.transitionPhase === 'stable')
   );
   const sessionGeneration = Number.isSafeInteger(session?.driverLoginPolicyGeneration)
     ? session.driverLoginPolicyGeneration
-    : 0;
+    : -1;
+  const { verifyStaffSessionAuthority } = require('../src/domains/driver-auth/staffEnrolment');
+  const staffAuthorized = session && await verifyStaffSessionAuthority({ db: database, authUid: record.authUid, session });
   return Boolean(
-    validPolicy
+    staffAuthorized && validPolicy
     && activeTrackingIntent
     && session
+    && session.schemaVersion === 1
     && session.sessionId === record.appSessionId
     && session.authUid === record.authUid
     && session.status === 'active'
@@ -159,10 +170,14 @@ async function hasCurrentDriverAuthority(database, record, nowMs) {
     && Number(session.expiresAtMs) > nowMs
     && user?.principalType === 'driver'
     && user?.driverId === record.driverId
+    && user?.driverPrincipalId === session.principalId
     && user?.driverAssignedTourId === record.tourId
+    && driver?.currentTourId === record.tourId
+    && assignmentTransition == null
     && assigned === true
     && sessionGeneration === policy.generation
-    && (policy.enforceSingleDevice !== true || driver?.authUid === record.authUid)
+    && (policy.enforceSingleDevice !== true || (driver?.authUid === record.authUid
+      && driver?.authUidStaffGeneration === staffPolicy?.generation))
   );
 }
 

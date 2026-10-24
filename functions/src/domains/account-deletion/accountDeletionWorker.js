@@ -27,6 +27,7 @@ const {
   deleteGroupMediaPage,
   deletePrivateMediaPage,
   deleteUidAccountRecords,
+  purgeOwnedStaffEnrolments,
   readAccountDeletionKeyPage,
   redactAuthoredChatNotificationJob,
   releaseOwnedDriverAuthority,
@@ -212,7 +213,11 @@ const processLeasedAccountDeletionPhase = async ({ db, bucket, auth, deletionId,
       });
     }
     if (job.substage === 'notification_deleted') {
-      const recordsRemoved = await deleteUidAccountRecords({
+      const staff = await purgeOwnedStaffEnrolments({ db, authUid: scope.authUid, nowMs,
+        leaseGuard: { ref: lease.ref, lease, nowMs } });
+      if (!staff.done) return commitLeasedJobProgress({ ref: lease.ref, lease, expectedPhase: job.phase,
+        next: job.phase, substage: 'notification_deleted', summaryDelta: { recordsRemoved: staff.recordsRemoved }, nowMs });
+      const uidRecordsRemoved = await deleteUidAccountRecords({
         db, scope, leaseGuard: { ref: lease.ref, lease, nowMs },
       });
       return commitLeasedJobProgress({
@@ -221,7 +226,7 @@ const processLeasedAccountDeletionPhase = async ({ db, bucket, auth, deletionId,
         expectedPhase: job.phase,
         next: job.phase,
         substage: 'uid_records_deleted',
-        summaryDelta: { recordsRemoved },
+        summaryDelta: { recordsRemoved: uidRecordsRemoved + staff.recordsRemoved },
         nowMs,
       });
     }
@@ -407,7 +412,10 @@ const processAccountDeletionJob = async ({
     if (lease.job.phase !== 'auth_delete') {
       await releaseAccountDeletionQueueEntry({ ref: queue.ref, ownerId, dueAtMs: nowMs });
     }
-    return { processed: true, phase: lease.job.phase, result };
+    const current = (await lease.ref.once('value')).val();
+    return { processed: true, phase: lease.job.phase, result,
+      phaseAdvanced: Boolean(current && current.phase !== lease.job.phase),
+      completed: current?.status === 'completed' };
   } catch (error) {
     const failure = await recordAccountDeletionFailure({
       db, ref: lease.ref, deletionId, lease: exactLease, error, nowMs,
@@ -498,6 +506,7 @@ module.exports = {
   deleteGroupMediaPage,
   deletePrivateMediaPage,
   deleteUidAccountRecords,
+  purgeOwnedStaffEnrolments,
   finalizeCompletedAccountDeletion,
   processAccountDeletionJob,
   processDueAccountDeletionJobs,

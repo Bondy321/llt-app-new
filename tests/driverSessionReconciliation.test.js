@@ -314,7 +314,10 @@ test('assignment retires real replay, exact caches and in-flight GPS without tra
     assert.equal(tracking.getSnapshot().active, false);
     assert.equal(replayCalls, 1, 'the second old-tour action must not execute');
     const remaining = await offline.getQueuedActions({ includeAll: true });
-    assert.deepEqual(remaining.data.map(action => [action.id, action.tourId]), [['f01-new', 'TOUR_B']]);
+    assert.deepEqual(remaining.data.map(action => [action.id, action.tourId]), [
+      ['f01-old-1', 'TOUR_A'], ['f01-old-2', 'TOUR_A'], ['f01-new', 'TOUR_B'],
+    ], 'retirement preserves unsent old-scope work without replaying it under the new assignment');
+    assert.deepEqual((await offline.getQueuedActions()).data.map(action => action.id), ['f01-new']);
     assert.equal((await offline.getTourPack('TOUR_A', 'driver', { ownerId: 'D-DEMO' })).data, null);
     assert.equal((await offline.replayQueue({ scope: oldScope })).success, false);
     assert.equal(h.state.tour.id, 'TOUR_B');
@@ -451,7 +454,7 @@ test('a failed retirement retry cannot clear a successor installation session or
   } finally { h.unsubscribe(); }
 });
 
-test('cold driver restore retires actual A queue/cache before exposing B and preserves its seed for a failed-retirement retry', async () => {
+test('cold driver restore isolates retained A queue and retires cache before exposing B and preserves its seed for a failed-retirement retry', async () => {
   const offline = require('../services/offlineSyncService');
   const { createDriverOperationalLifecycleService } = require('../services/driverOperationalLifecycleService');
   const h = await harness(assigned('TOUR_A', 2));
@@ -481,7 +484,8 @@ test('cold driver restore retires actual A queue/cache before exposing B and pre
     allowManifestPurge = true;
     assert.equal(await runRestoreSession(deps, next), true);
     assert.equal(privateManifest.size, 0);
-    assert.equal((await offline.getQueuedActions({ includeAll: true })).data.length, 0);
+    assert.deepEqual((await offline.getQueuedActions({ includeAll: true })).data.map(action => action.id), ['cold-restore-A']);
+    assert.equal((await offline.replayQueue({ scope: oldScope })).success, false, 'retired scope cannot replay retained work');
     assert.equal((await offline.getTourPack('TOUR_A', 'driver', { ownerId: 'D-DEMO' })).data, null);
     assert.equal(h.state.tour.id, 'TOUR_B');
     assert.equal(JSON.parse(h.values.get('tour')).id, 'TOUR_B');

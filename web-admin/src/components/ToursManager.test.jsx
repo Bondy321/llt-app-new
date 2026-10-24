@@ -123,7 +123,8 @@ beforeEach(() => {
       ? currentToursFixture
       : dbRef.path === 'drivers' ? driversFixture
         : dbRef.path === 'driver_tour_pack_admin_status' ? currentPackStatusFixture : {};
-    callback({ val: () => value, size: Object.keys(value).length });
+    const exactValue = dbRef.path.startsWith('tours/') ? currentToursFixture[dbRef.path.slice(6)] : value;
+    callback({ exists: () => exactValue != null, val: () => exactValue, size: Object.keys(exactValue || {}).length });
     return vi.fn();
   });
 });
@@ -343,4 +344,30 @@ describe('ToursManager query-param status behavior', () => {
     expect(screen.getByText('Showing 2 of 2 tours')).toBeInTheDocument();
     expect(screen.getByText('Past Tour')).toBeInTheDocument();
   }, 15000);
+});
+it('keeps an exact result outside the bounded window live through edits and deletion at the same URL', async () => {
+  let exactListener;
+  const exactUnsubscribe = vi.fn();
+  const record = { ...toursFixture.TOUR_1, name: 'Exact old name', driverName: 'Old assignment', isActive: true };
+  mockOnValue.mockImplementation((reference, callback) => {
+    if (reference.path === 'tours/OUTSIDE') {
+      exactListener = callback;
+      callback({ exists: () => true, val: () => record });
+      return exactUnsubscribe;
+    }
+    const value = reference.path === 'drivers' ? driversFixture : {};
+    callback({ exists: () => true, val: () => value, size: 0 });
+    return vi.fn();
+  });
+  const mounted = renderAt('?q=OUTSIDE');
+  expect(await screen.findByText('Exact old name')).toBeInTheDocument();
+  exactListener({ exists: () => true, val: () => ({ ...record, name: 'Exact renamed tour', driverName: 'New assignment', isActive: false }) });
+  expect(await screen.findByText('Exact renamed tour')).toBeInTheDocument();
+  expect(screen.queryByText('Exact old name')).not.toBeInTheDocument();
+  expect(screen.getByText('New assignment')).toBeInTheDocument();
+  exactListener({ exists: () => false, val: () => null });
+  await waitFor(() => expect(screen.queryByText('Exact renamed tour')).not.toBeInTheDocument());
+  expect(screen.getByTestId('location-search')).toHaveTextContent('?q=OUTSIDE');
+  mounted.unmount();
+  expect(exactUnsubscribe).toHaveBeenCalledTimes(1);
 });

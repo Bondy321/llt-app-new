@@ -31,7 +31,7 @@ const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 test('cold server credential transaction loads an existing identity before binding the first device', async () => {
   const credentialPath = 'passenger_identity_security/COLD_LOGIN';
@@ -51,9 +51,9 @@ test('cold server credential transaction loads an existing identity before bindi
       }) },
     });
     assert.equal(seen[0], null, 'fresh SDK connection has no cached security record');
-    assert.equal(result.authorizedAuthUid, USER_UID);
+    assert.equal(result.authorizedAuthUids[USER_UID], true);
     assert.equal(result.passengerPrincipalId, STABLE_ID);
-    assert.equal((await ref.once('value')).val().authorizedAuthUid, USER_UID);
+    assert.equal((await ref.once('value')).val().authorizedAuthUids[USER_UID], true);
   });
 });
 
@@ -79,7 +79,7 @@ test('cold credential admission preserves existing phones and rejects missing, m
         const identity = await login();
         assert.equal(isPassengerDeviceAuthorized(identity, USER_UID), true);
         assert.equal(identity.passengerPrincipalId, STABLE_ID);
-        if (record.authorizedAuthUid) assert.equal(isPassengerDeviceAuthorized(identity, record.authorizedAuthUid), true);
+        if (record.authorizedAuthUid) assert.equal(isPassengerDeviceAuthorized(identity, record.authorizedAuthUid), record.authorizedAuthUid === USER_UID);
         assert.deepEqual((await ref.once('value')).val(), identity);
       }
     });
@@ -147,12 +147,15 @@ test.after(async () => {
   if (testEnv) await testEnv.cleanup();
 });
 
-test('passenger identity profile is server-owned and an existing binding is owner-removable only', async () => {
+test('passenger identity profile and deletion of existing bindings remain server-owned', async () => {
   const db = dbFor(USER_UID);
   await assertSucceeds(db.ref(`users/${USER_UID}`).get());
   await assertFails(db.ref(`users/${USER_UID}/stablePassengerId`).set('pax_v2_fedcba9876543210fedcba9876543210'));
-  await assertSucceeds(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(null));
+  await assertFails(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(null));
   await assertFails(db.ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).set(true));
+  await testEnv.withSecurityRulesDisabled(async context => {
+    assert.equal((await context.database(dbUrl).ref(`identity_bindings/${STABLE_KEY}/${USER_UID}`).get()).val(), true);
+  });
 });
 
 test('passenger login security records cannot be read, created, or reassigned by clients', async () => {

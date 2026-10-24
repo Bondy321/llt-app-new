@@ -58,9 +58,12 @@ test('navigation writer cannot overwrite display or auth evidence with a capture
   let entries;
   const deps = { SESSION_KEYS: { TOUR_DATA: 'tour', BOOKING_DATA: 'booking', LAST_SCREEN: 'screen', IDENTITY_BINDING: 'identity' },
     SessionStorage: { multiSet: async (value) => { entries = value; } }, logger: { error() {} },
-    passengerTripActive: true, tourData: { stale: true }, bookingData: { stale: true }, currentScreen: 'Itinerary' };
+    passengerTripActive: true, tourData: { id: scope.tourId }, bookingData: { stablePassengerId: scope.principalId }, currentScreen: 'Itinerary',
+    appSession: { ...scope, principalType: 'passenger', sessionRevision: 1 },
+    appSessionRef: { current: { ...scope, principalType: 'passenger', sessionRevision: 1 } },
+    appSessionService: { persistProjection: async ({ entries: value, isCurrent }) => { assert.equal(isCurrent(), true); entries = value; return true; } } };
   await runSaveSessionProjection(deps);
   assert.deepEqual(entries, [['screen', 'Itinerary']]);
-  await runSaveSessionProjection(deps, { bookingData: props.bookingData, tourData: props.tourData });
+  await runSaveSessionProjection(deps, { bookingData: { ...props.bookingData, stablePassengerId: scope.principalId }, tourData: props.tourData });
   assert.equal(entries[0][0], 'tour'); assert.equal(entries[1][0], 'booking');
 });

@@ -64,6 +64,17 @@ export async function fetchTourByExactId(database, candidate) {
   return { tourId, tour: snapshot.val() || {} };
 }
 
+export function subscribeToTourByExactId(database, candidate, onData, onError) {
+  const tourId = typeof candidate === 'string' ? candidate.trim().toUpperCase().replace(/\s+/g, '_') : '';
+  if (!tourId || tourId.length > 100 || /[.#$/[\]]/.test(tourId)) {
+    onData(null);
+    return () => {};
+  }
+  return onValue(ref(database, `tours/${tourId}`), (snapshot) => {
+    onData({ tourId, tour: snapshot.exists() ? snapshot.val() : null });
+  }, onError);
+}
+
 export async function fetchDriverDirectoryPage(database, { afterKey = null, limit = DRIVER_DIRECTORY_PAGE_SIZE } = {}) {
   const boundedLimit = Math.min(clampLimit(limit, DRIVER_DIRECTORY_PAGE_SIZE), DRIVER_DIRECTORY_LIMIT - 1);
   const constraints = [orderByKey()];

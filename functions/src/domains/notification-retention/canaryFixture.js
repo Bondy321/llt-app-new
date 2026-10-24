@@ -108,7 +108,7 @@ const reconcileSupersededPriorControl = async ({ db, current, rollout, nowMs }) 
   if (!(await rolloutStillMatches({ db, rollout }))) return null;
   let jobSafe = false;
   const jobResult = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (value) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (value) => {
     if (!value) { jobSafe = true; return value; }
     if (value.canaryFixtureFingerprint !== current.fixtureFingerprint) return undefined;
     jobSafe = true;
@@ -119,7 +119,7 @@ const reconcileSupersededPriorControl = async ({ db, current, rollout, nowMs }) 
   if (!jobSafe || !(await rolloutStillMatches({ db, rollout }))) return null;
   let attemptSafe = false;
   const attemptResult = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_delivery_attempts/${attemptId}`), (value) => {
+    db.ref(`notification_delivery_attempts_v2/${attemptId}`), (value) => {
     if (!value) { attemptSafe = true; return value; }
     if (value.canaryFixtureFingerprint !== current.fixtureFingerprint) return undefined;
     attemptSafe = true;
@@ -268,11 +268,11 @@ const ensureNotificationRetentionCanaryFixture = async ({ db, rollout, nowMs = D
   const job = buildFixtureJob({ identity, nowMs });
   const attempt = buildFixtureAttempt({ identity, job });
   if (!(await compareCreate({
-    ref: db.ref(`notification_jobs/${identity.jobId}`),
+    ref: db.ref(`notification_jobs_v2/${identity.jobId}`),
     candidate: job,
     fingerprint: identity.fixtureFingerprint,
   })) || !(await compareCreate({
-    ref: db.ref(`notification_delivery_attempts/${identity.attemptId}`),
+    ref: db.ref(`notification_delivery_attempts_v2/${identity.attemptId}`),
     candidate: attempt,
     fingerprint: identity.fixtureFingerprint,
   }))) return { ready: false, reason: 'fixture_path_conflict' };
@@ -330,8 +330,8 @@ const verifyAndCompleteCanaryFixture = async ({
     .once('value')).val();
   if (!validFinalizationProof(currentControl, rollout, fixture)) return false;
   const requiredAbsentPaths = [
-    `notification_jobs/${fixture.jobId}`,
-    `notification_delivery_attempts/${fixture.attemptId}`,
+    `notification_jobs_v2/${fixture.jobId}`,
+    `notification_delivery_attempts_v2/${fixture.attemptId}`,
     `${NOTIFICATION_RETENTION_PATHS.jobs}/${fixture.jobId}`,
   ];
   for (const path of requiredAbsentPaths) {

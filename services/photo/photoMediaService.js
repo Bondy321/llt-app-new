@@ -1,3 +1,4 @@
+const { withPhotoRequestBoundary } = require('./photoRequestBoundary');
 const {
   ALLOWED_IMAGE_TYPES,
   GROUP_DELETE_FUNCTION_NAME,
@@ -112,13 +113,16 @@ const buildGroupPhotoEndpointUrl = (functionName, authInstance = auth) => {
   return projectId ? `https://europe-west1-${projectId}.cloudfunctions.net/${functionName}` : null;
 };
 
-const buildGroupPhotoAuthHeaders = async (authInstance = auth, appCheckTokenFn = getCurrentAppCheckToken) => {
-  const token = await authInstance?.currentUser?.getIdToken?.();
+const buildGroupPhotoAuthHeaders = async (authInstance = auth, appCheckTokenFn = getCurrentAppCheckToken, boundary = null) => {
+  if (!boundary) return withPhotoRequestBoundary({ authInstance }, scoped => buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, scoped));
+  boundary.check();
+  const token = await boundary.user.getIdToken?.();
+  boundary.check();
   if (!token) throw new Error('Authenticated user required for group photos');
   const appCheckToken = await appCheckTokenFn?.();
-  const headers = { Authorization: `Bearer ${token}` };
-  if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
-  return headers;
+  boundary.check();
+  if (!appCheckToken) throw new Error('App Check is required for photos');
+  return { Authorization: `Bearer ${token}`, 'x-firebase-appcheck': appCheckToken };
 };
 
 const resolveGroupPhotoMedia = async ({ tourId, photos }, {
@@ -126,6 +130,7 @@ const resolveGroupPhotoMedia = async ({ tourId, photos }, {
   fetchFn = fetch,
   endpoint = buildGroupPhotoEndpointUrl(GROUP_MEDIA_FUNCTION_NAME, authInstance),
   appCheckTokenFn = getCurrentAppCheckToken,
+  requestTimeoutMs = 15000,
 } = {}) => {
   if (!Array.isArray(photos) || photos.length === 0) return [];
   const safePhotos = photos.map((photo) => {
@@ -133,23 +138,25 @@ const resolveGroupPhotoMedia = async ({ tourId, photos }, {
     return safePhoto;
   });
   if (!endpoint) return safePhotos;
-  const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
-  const resolvedMedia = {};
-  for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
-    const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
-    const response = await fetchFn(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ tourId, photoIds: batch.map((photo) => photo.id) }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !isResolvedMediaResponse(payload)
-      || Number(payload.expiresAtMs) <= Date.now()) {
-      throw new Error('Group photo access could not be authorized');
+  return withPhotoRequestBoundary({ authInstance, fetchFn, timeoutMs: requestTimeoutMs }, async boundary => {
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, boundary);
+    const resolvedMedia = {};
+    for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
+      const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
+      const response = await boundary.fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ tourId, photoIds: batch.map((photo) => photo.id) }),
+      });
+      const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
+      if (!response.ok || !isResolvedMediaResponse(payload)
+        || Number(payload.expiresAtMs) <= Date.now()) {
+        throw new Error('Group photo access could not be authorized');
+      }
+      Object.assign(resolvedMedia, payload.media);
     }
-    Object.assign(resolvedMedia, payload.media);
-  }
-  return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
+    return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
+  });
 };
 
 const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
@@ -157,6 +164,7 @@ const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
   fetchFn = fetch,
   endpoint = buildPrivateMediaEndpointUrl(authInstance),
   appCheckTokenFn = getCurrentAppCheckToken,
+  requestTimeoutMs = 15000,
 } = {}) => {
   if (!Array.isArray(photos) || photos.length === 0) return [];
   const safePhotos = photos.map((photo) => {
@@ -164,23 +172,25 @@ const resolvePrivatePhotoMedia = async ({ tourId, ownerKey, photos }, {
     return safePhoto;
   });
   if (!endpoint) return safePhotos;
-  const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
-  const resolvedMedia = {};
-  for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
-    const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
-    const response = await fetchFn(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ tourId, ownerKey, photoIds: batch.map((photo) => photo.id) }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !isResolvedMediaResponse(payload)
-      || Number(payload.expiresAtMs) <= Date.now()) {
-      throw new Error('Private photo access could not be authorized');
+  return withPhotoRequestBoundary({ authInstance, fetchFn, timeoutMs: requestTimeoutMs }, async boundary => {
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, boundary);
+    const resolvedMedia = {};
+    for (let offset = 0; offset < safePhotos.length; offset += PRIVATE_MEDIA_BATCH_LIMIT) {
+      const batch = safePhotos.slice(offset, offset + PRIVATE_MEDIA_BATCH_LIMIT);
+      const response = await boundary.fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ tourId, ownerKey, photoIds: batch.map((photo) => photo.id) }),
+      });
+      const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
+      if (!response.ok || !isResolvedMediaResponse(payload)
+        || Number(payload.expiresAtMs) <= Date.now()) {
+        throw new Error('Private photo access could not be authorized');
+      }
+      Object.assign(resolvedMedia, payload.media);
     }
-    Object.assign(resolvedMedia, payload.media);
-  }
-  return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
+    return safePhotos.map((photo) => ({ ...photo, ...(resolvedMedia[photo.id] || {}) }));
+  });
 };
 
 /**

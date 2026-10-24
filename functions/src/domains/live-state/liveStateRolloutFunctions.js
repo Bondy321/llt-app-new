@@ -17,11 +17,9 @@ const {
 
 const onRequestWithResult = /** @type {any} */ (onRequest);
 const ROLLOUT_PATH = 'live_state_rollout/v1';
-const CUTOVER_PREREQUISITE_REASON = 'LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET';
-
 const evaluateOperationalRolloutPhase = (phase) => phase === 'cutover'
-  ? { allowed: false, reason: CUTOVER_PREREQUISITE_REASON }
-  : { allowed: true, reason: null };
+  ? { allowed: true, reason: null }
+  : { allowed: false, reason: 'UNSUPPORTED_LIVE_STATE_CONTRACT' };
 
 const authorize = async ({ req, res }) => {
   if (!applyAuthenticatedCors(req, res)) return null;
@@ -35,7 +33,7 @@ const authorize = async ({ req, res }) => {
     return null;
   }
   const db = admin.database();
-  if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db }))) {
+  if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db, claims: requestAuth.claims, requireSecondFactor: true }))) {
     res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
     return null;
   }

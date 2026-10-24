@@ -10,12 +10,15 @@ const {
   normalizeSessionScope,
   filterActionsForScope,
   isSameSessionScope,
+  withQueueMutationLock,
 } = require('./offlineSyncContext');
+const { boundedNetworkDecision } = require('../boundedNetworkDecision');
 
 const {
   setLastSuccessAt,
   emitQueueState,
   getQueueRaw,
+  setQueueRaw,
   getProcessedActionIds,
   setProcessedActionIds,
 } = require('./syncStatusService');
@@ -115,7 +118,7 @@ const hasReplayHandler = (action, services = {}) => {
   return false;
 };
 
-const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessionScope } = {}) => {
+const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessionScope, attemptTimeoutMs = 15000 } = {}) => {
   const replayScope = normalizeSessionScope(scope);
   if (!replayScope) {
     logger.info('OfflineSync', 'Queue replay skipped without an active signed-in tour scope');
@@ -127,12 +130,12 @@ const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessi
       outcomes: [],
     });
   }
-  if (runtimeState.activeSessionScope && !isSameSessionScope(runtimeState.activeSessionScope, replayScope)) {
+  if (!runtimeState.activeSessionScope || !isSameSessionScope(runtimeState.activeSessionScope, replayScope)) {
     logger.warn('OfflineSync', 'Queue replay rejected for a non-active session scope', {
       requestedTourId: maskIdentifier(replayScope.tourId),
       requestedPrincipalId: maskIdentifier(replayScope.principalId),
-      activeTourId: maskIdentifier(runtimeState.activeSessionScope.tourId),
-      activePrincipalId: maskIdentifier(runtimeState.activeSessionScope.principalId),
+      activeTourId: maskIdentifier(runtimeState.activeSessionScope?.tourId),
+      activePrincipalId: maskIdentifier(runtimeState.activeSessionScope?.principalId),
     });
     return RESPONSE.fail('Offline actions can only sync for the active signed-in tour session.');
   }
@@ -178,7 +181,7 @@ const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessi
     for (const action of sortedQueue) {
       if (
         runtimeState.activeSessionGeneration !== replayGeneration
-        || (runtimeState.activeSessionScope && !isSameSessionScope(runtimeState.activeSessionScope, replayScope))
+        || (!runtimeState.activeSessionScope || !isSameSessionScope(runtimeState.activeSessionScope, replayScope))
       ) {
         skipped += 1;
         logger.warn('OfflineSync', 'Queue replay stopped because the signed-in tour session changed', {
@@ -242,8 +245,40 @@ const replayQueue = async ({ db, services = {}, scope = runtimeState.activeSessi
       logger.info('OfflineSync', 'Queue replay action started', {
         action: summarizeQueueActionForLog({ ...action, status: inProgressStatus, lastError: null }),
       });
-      const result = await applyReplayAction(action, { ...services, db });
+      // Timeout releases the local replay worker, not the dispatched remote
+      // operation. All replay handlers retain immutable action IDs/fences.
+      const result = await boundedNetworkDecision(() => applyReplayAction(action, { ...services, db }), attemptTimeoutMs)
+        .catch(error => ({ success: false, error: error.message, retryable: true }));
+      if (runtimeState.activeSessionGeneration !== replayGeneration) break;
 
+      if (result?.success && action.type === 'MANIFEST_UPDATE') {
+        const cache = services.driverManifestCache || require('../driverManifestCacheService');
+        const isCurrent = () => runtimeState.activeSessionGeneration === replayGeneration;
+        const publication = await withQueueMutationLock(async () => {
+          if (!isCurrent()) return { success: false, error: 'Manifest session changed' };
+          const allCurrent = await getQueueRaw();
+          const current = filterActionsForScope(allCurrent, replayScope);
+          const successors = current.filter(item => item.type === 'MANIFEST_UPDATE' && item.id !== action.id
+            && item.payload?.bookingRef === action.payload?.bookingRef);
+          const latest = successors.at(-1);
+          const payload = latest?.payload || action.payload;
+          const driverId = replayScope.cacheOwnerId || replayScope.principalId?.replace(/^driver:/, '');
+          const cached = await cache.get({ tourId: action.tourId, driverId });
+          if (!cached.success) return cached;
+          const saved = cached.data ? await cache.applyOptimisticUpdate({ tourId: action.tourId, driverId,
+            bookingRef: action.payload.bookingRef, passengerIds: payload.passengerIds, rosterRevision: payload.rosterRevision,
+            passengerStatuses: latest ? payload.passengerStatuses : result.passengerStatus,
+            isCurrent, conflict: result.reconciled ? result.conflict : null, reason: 'reconciliation' }) : cached;
+          if (saved.success && isCurrent()) await setQueueRaw(allCurrent.filter(item => item.id !== action.id), { silent: true });
+          return saved;
+        });
+        if (!publication.success) {
+          result.success = false;
+          result.error = publication.error || 'Manifest reconciliation could not be saved';
+          result.retryable = true;
+        }
+        if (!isCurrent()) break;
+      }
       if (result?.success) {
         processed += 1;
         outcomes.push({

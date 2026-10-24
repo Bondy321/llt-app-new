@@ -1,6 +1,7 @@
 const { createPersistenceProvider } = require('./persistenceProvider');
 const driverTourPackService = require('./driverTourPackService');
 const offlineSyncService = require('./offlineSyncService');
+const { boundedNetworkDecision } = require('./boundedNetworkDecision');
 
 const CACHE_PREFIX = 'driver_tour_pack_actions_v1';
 const ACTION_TYPE = 'DRIVER_TOUR_PACK_ACTION';
@@ -138,6 +139,16 @@ function createDriverTourPackActionService({
   now = () => Date.now(),
 } = {}) {
   const database = () => db || getDatabase?.();
+  const tails = new Map();
+  const generations = new Map();
+  let lastMutationStamp = 0;
+  const generation = scope => generations.get(cacheKey(scope)) || 0;
+  const withScope = (scope, operation) => {
+    const key = cacheKey(scope);
+    const result = (tails.get(key) || Promise.resolve()).catch(() => {}).then(operation);
+    tails.set(key, result);
+    return result.finally(() => { if (tails.get(key) === result) tails.delete(key); });
+  };
   const readCache = async (scopeInput) => {
     const scope = normalizeScope(scopeInput);
     if (!scope.ok) return { success: false, error: scope.reason };
@@ -148,15 +159,28 @@ function createDriverTourPackActionService({
       return { success: true, data: { actions: normalizeActions(parsed.actions), change: normalizeChange(parsed.change, scope), cachedAtMs: parsed.cachedAtMs || null } };
     } catch (error) { return { success: false, error: error?.message || String(error) }; }
   };
-  const writeCache = async (scope, actions, change) => {
+  const writeCacheNow = async (scope, actions, change) => {
     const entry = { actions: normalizeActions(actions), change: normalizeChange(change, scope), cachedAtMs: now() };
     await storage.setItemAsync(cacheKey(scope), JSON.stringify(entry));
     return entry;
   };
+  const writeCache = (scope, actions, change, expectedGeneration = generation(scope)) => withScope(scope, async () => {
+    if (generation(scope) !== expectedGeneration) return null;
+    const queued = await queue.getQueuedActions?.({ scope: queueScope(scope) });
+    let current = normalizeActions(actions);
+    for (const action of queued?.data || []) {
+      if (action.type === ACTION_TYPE && action.payload?.departureKey === scope.departureKey
+        && action.payload?.driverId === scope.driverId && action.status !== 'completed') {
+        current = applyOptimistic(current, action.payload, action.payload.clientUpdatedAtMs);
+      }
+    }
+    return writeCacheNow(scope, current, change);
+  });
   const purge = async (scopeInput) => {
     const scope = normalizeScope(scopeInput);
     if (!scope.ok) return { success: false, error: scope.reason };
-    try { await storage.deleteItemAsync(cacheKey(scope)); return { success: true, data: { purged: true } }; }
+    generations.set(cacheKey(scope), generation(scope) + 1);
+    try { await withScope(scope, () => storage.deleteItemAsync(cacheKey(scope))); return { success: true, data: { purged: true } }; }
     catch (error) { return { success: false, error: error?.message || String(error) }; }
   };
   const subscribe = (scopeInput, onChange, onError) => {
@@ -165,12 +189,14 @@ function createDriverTourPackActionService({
     if (!scope.ok || !activeDb?.ref) { onError?.(new Error(scope.reason || 'Driver action database unavailable')); return () => {}; }
     const actionRef = activeDb.ref(`driver_tour_pack_actions/${scope.departureKey}/${scope.driverId}`);
     const changeRef = activeDb.ref(`driver_tour_pack_changes/${scope.departureKey}/latest`);
+    const subscribedGeneration = generation(scope);
     let active = true; let actionsReady = false; let changeReady = false;
     let actions = normalizeActions(null); let change = null;
     const emit = () => {
       if (!active || !actionsReady || !changeReady) return;
-      writeCache(scope, actions, change).catch(onError);
-      onChange?.({ actions, change, source: 'remote' });
+      writeCache(scope, actions, change, subscribedGeneration).then(entry => {
+        if (active && entry && generation(scope) === subscribedGeneration) onChange?.({ actions: entry.actions, change, source: 'remote' });
+      }).catch(onError);
     };
     const fail = (error) => { if (active) onError?.(error); };
     const onActions = (snapshot) => { actions = normalizeActions(snapshot?.val?.()); actionsReady = true; emit(); };
@@ -206,7 +232,7 @@ function createDriverTourPackActionService({
     catch (error) { return { success: false, error: error?.message || String(error), code: error?.code || null }; }
   };
   const enqueue = (payload) => queue.enqueueAction({
-    id: `driver-pack:${operationKey(payload)}`,
+    id: `driver-pack:${operationKey(payload)}:${payload.mutationId || payload.clientUpdatedAtMs}`,
     type: ACTION_TYPE,
     tourId: payload.tourId,
     createdAt: new Date(payload.clientUpdatedAtMs || now()).toISOString(),
@@ -215,11 +241,17 @@ function createDriverTourPackActionService({
     attempts: 0,
     status: 'queued',
   });
-  const submit = async (scopeInput, operation, { online = true } = {}) => {
+  const submitNow = async (scopeInput, operation, { online = true } = {}) => {
     const scope = normalizeScope(scopeInput);
     if (!scope.ok) return { success: false, error: scope.reason };
-    const stamp = now();
+    const expectedGeneration = generation(scope);
     const cached = await readCache(scope);
+    const pending = await queue.getQueuedActions?.({ scope: queueScope(scope) });
+    if (pending && !pending.success) return pending;
+    const pendingStamp = Math.max(0, ...(pending?.data || []).filter(action => action.type === ACTION_TYPE)
+      .map(action => Number(action.payload?.clientUpdatedAtMs) || 0));
+    const stamp = Math.max(now(), lastMutationStamp + 1, (cached.data?.actions?.updatedAtMs || 0) + 1, pendingStamp + 1);
+    lastMutationStamp = stamp;
     const issueIds = new Set(Object.keys(cached.data?.actions?.issues || {}));
     const nextIssueId = Array.from({ length: MAX_ISSUES }, (_, index) => `issue_${String(index + 1).padStart(3, '0')}`)
       .find((issueId) => !issueIds.has(issueId));
@@ -251,20 +283,39 @@ function createDriverTourPackActionService({
       ...(operation.state ? { state: operation.state } : {}),
       ...(issue ? { issue } : {}),
       clientUpdatedAtMs: stamp,
+      mutationId: `${stamp}_${Math.random().toString(36).slice(2, 12)}`,
     };
     const validation = validatePayload(payload);
     if (!validation.valid) return { success: false, error: validation.error };
     const optimistic = applyOptimistic(cached.data?.actions, payload, stamp);
-    const direct = online ? await submitDirect(payload) : { success: false, error: 'Offline' };
-    if (direct.success) {
-      await writeCache(scope, optimistic, cached.data?.change).catch(() => {});
-      return { ...direct, data: { ...direct.data, actions: optimistic, issueId: issue?.issueId || null } };
-    }
-    if (online && !isNetworkError(direct.error)) return direct;
+    // Enqueue before network dispatch so an interrupted operation always keeps
+    // its immutable ID. A newer mutation has a distinct ID and supersession key.
     const queued = await enqueue(payload);
     if (!queued.success) return queued;
-    await writeCache(scope, optimistic, cached.data?.change).catch(() => {});
+    if (generation(scope) !== expectedGeneration) return { success: false, error: 'Driver action scope changed' };
+    const direct = online ? await boundedNetworkDecision(() => submitDirect(payload), 8000)
+      .catch(error => ({ success: false, error: error.message })) : { success: false, error: 'Offline' };
+    if (generation(scope) !== expectedGeneration) return { success: false, error: 'Driver action scope changed' };
+    if (direct.success) {
+      await queue.removeAction?.(`driver-pack:${operationKey(payload)}:${payload.mutationId}`, { scope: queueScope(scope) });
+      await writeCacheNow(scope, optimistic, cached.data?.change);
+      return { ...direct, data: { ...direct.data, actions: optimistic, issueId: issue?.issueId || null } };
+    }
+    if (online && !isNetworkError(direct.error)) {
+      await queue.updateAction?.(`driver-pack:${operationKey(payload)}:${payload.mutationId}`,
+        { status: 'failed', lastError: direct.error }, { scope: queueScope(scope) });
+      return direct;
+    }
+    await writeCacheNow(scope, optimistic, cached.data?.change);
     return { success: true, data: { queued: true, actions: optimistic, issueId: issue?.issueId || null } };
+  };
+  const submit = (scopeInput, operation, options) => {
+    const scope = normalizeScope(scopeInput);
+    if (!scope.ok) return Promise.resolve({ success: false, error: scope.reason });
+    const expectedGeneration = generation(scope);
+    return withScope(scope, () => generation(scope) === expectedGeneration
+      ? submitNow(scope, operation, options)
+      : { success: false, error: 'Driver action scope changed' });
   };
   return { cacheKey, enqueue, normalizeScope, purge, readCache, submit, submitDirect, subscribe, writeCache };
 }

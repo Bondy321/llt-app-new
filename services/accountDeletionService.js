@@ -1,3 +1,4 @@
+import { withHttpRequestBoundary } from './httpRequestBoundary';
 import { auth, authHelpers, getCurrentAppCheckToken } from '../firebase';
 import {
   projectAccountDeletionAcceptedResponse,
@@ -115,6 +116,7 @@ export const createAccountDeletionService = ({
   persistence = createDefaultPersistence(),
   fetchFn = (...args) => fetch(...args),
   now = () => Date.now(),
+  requestTimeoutMs = 15000,
   generateReceipt = () => generateDeletionReceipt(),
   getFirebase = () => ({ auth, authHelpers, getCurrentAppCheckToken }),
 } = {}) => {
@@ -171,11 +173,12 @@ export const createAccountDeletionService = ({
 
   const clearPending = () => persistence.deleteItemAsync(ACCOUNT_DELETION_PENDING_KEY);
 
-  const post = async (functionName, body, {
+  const postWithinBoundary = async (boundary, functionName, body, {
     expectedAuthUid = null,
     freshAuthOnFailure = false,
     freshAuthAttempted = false,
   } = {}) => {
+    boundary.check();
     const firebase = getFirebase();
     const endpoint = buildEndpoint(functionName);
     if (!endpoint) return genericFailure('ENDPOINT_UNAVAILABLE');
@@ -184,45 +187,57 @@ export const createAccountDeletionService = ({
     try {
       currentUser = firebase.auth?.currentUser || null;
       if (!currentUser && freshAuthOnFailure) {
-        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+        boundary.check();
+        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.({ expectedUser: currentUser, checkBoundary: boundary.check });
       }
       if (!currentUser?.getIdToken) return genericFailure('AUTH_UNAVAILABLE');
       if (expectedAuthUid && currentUser.uid !== expectedAuthUid) {
         return genericFailure('AUTH_UNAVAILABLE');
       }
+      boundary.check();
       token = await currentUser.getIdToken();
+      boundary.check();
     } catch {
-      if (!freshAuthOnFailure) return genericFailure('AUTH_UNAVAILABLE');
+      if (!freshAuthOnFailure || firebase.auth?.currentUser !== currentUser) return genericFailure('AUTH_UNAVAILABLE');
       try {
-        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+        boundary.check();
+        currentUser = await firebase.authHelpers?.replaceWithFreshAnonymous?.({ expectedUser: currentUser, checkBoundary: boundary.check });
         token = await currentUser?.getIdToken?.();
       } catch {
         return genericFailure('AUTH_UNAVAILABLE');
       }
     }
     if (!token) return genericFailure('AUTH_UNAVAILABLE');
+    boundary.check();
     const appCheckToken = await firebase.getCurrentAppCheckToken?.();
+    boundary.check();
+    if (firebase.auth?.currentUser !== currentUser) return genericFailure('AUTH_UNAVAILABLE');
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     if (appCheckToken) headers['x-firebase-appcheck'] = appCheckToken;
     let response;
     try {
       response = await fetchFn(endpoint, {
         method: 'POST',
+        signal: boundary.signal,
         headers,
         body: JSON.stringify(body),
       });
     } catch {
       return genericFailure('NETWORK_ERROR');
     }
+    boundary.check();
     const payload = await response.json().catch(() => null);
+    boundary.check();
+    if (firebase.auth?.currentUser !== currentUser) return genericFailure('AUTH_UNAVAILABLE');
     if (!response.ok) {
       if (response.status === 401 && freshAuthOnFailure && !freshAuthAttempted) {
         try {
-          await firebase.authHelpers?.replaceWithFreshAnonymous?.();
+          boundary.check();
+          await firebase.authHelpers?.replaceWithFreshAnonymous?.({ expectedUser: currentUser, checkBoundary: boundary.check });
         } catch {
           return genericFailure('AUTH_UNAVAILABLE');
         }
-        return post(functionName, body, {
+        return postWithinBoundary(boundary, functionName, body, {
           expectedAuthUid,
           freshAuthOnFailure: true,
           freshAuthAttempted: true,
@@ -240,6 +255,13 @@ export const createAccountDeletionService = ({
     }
     const valid = validateAccountDeletionResponse(payload);
     return valid || genericFailure('INVALID_SERVER_RESPONSE');
+  };
+
+  const post = async (functionName, body, options) => {
+    try {
+      return await withHttpRequestBoundary(boundary => postWithinBoundary(boundary, functionName, body, options),
+        { timeoutMs: requestTimeoutMs });
+    } catch { return genericFailure('NETWORK_ERROR'); }
   };
 
   const applyServerStatus = async (pending, response) => {

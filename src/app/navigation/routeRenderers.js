@@ -199,6 +199,7 @@ const renderNotificationPreferences = (context) => {
   const userId = resolveAuthScopedUserId({ canonicalIdentity: context.canonicalIdentity, authUser: context.user });
   return (
     <NotificationPreferencesScreen
+      appSession={context.appSession}
       onBack={() => context.navigateBack(returnTarget, { from: 'NotificationPreferences' })}
       userId={userId}
       isOnboarding={context.screenParams?.isOnboarding === true}

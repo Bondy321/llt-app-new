@@ -8,6 +8,8 @@ import * as driverManifestCache from '../../services/driverManifestCacheService'
 import * as bookingService from '../../services/bookingServiceRealtime';
 import * as chatService from '../../services/chatService';
 import logger, { maskIdentifier } from '../../services/loggerService';
+import { summarizeManifestQueue } from './manifestQueuePresentation';
+import useManifestStatusFeedback from './useManifestStatusFeedback';
 const { normalizeSyncState } = require('../../utils/manifestSyncState');
 const { normalizeTourId } = require('../../services/tourIdentityService');
 const { toTelephoneUrl } = require('../../utils/bookingLeadPhone');
@@ -30,10 +32,9 @@ export default function PassengerManifestController({ route, navigation, driverT
   const [bookingSyncState, setBookingSyncState] = useState({});
   const [manifestConflict, setManifestConflict] = useState(null);
   const [statusFeedback, setStatusFeedback] = useState(null);
-  const feedbackTimeoutRef = useRef(null);
   const mountedRef = useRef(true);
   const manifestLoadSeqRef = useRef(0);
-  const scopeKey = `${normalizeTourId(tourId)}|${String(offlineCacheOwnerId || '').trim().toUpperCase()}|${sessionGeneration}`;
+  const scopeKey = `${authUid || ''}|${actorPrincipalId || ''}|${normalizeTourId(tourId)}|${String(offlineCacheOwnerId || '').trim().toUpperCase()}|${sessionGeneration}`;
   const activeScopeKeyRef = useRef(scopeKey);
   const manifestSourceRef = useRef('none');
   const cacheScopeEnabled = /^D-[A-Z0-9_-]+$/.test(String(offlineCacheOwnerId || '').trim().toUpperCase());
@@ -56,25 +57,7 @@ export default function PassengerManifestController({ route, navigation, driverT
     logger.trackScreen('PassengerManifest', { tourId });
   }, [tourId]);
 
-  const clearFeedbackTimeout = () => {
-    if (feedbackTimeoutRef.current) {
-      clearTimeout(feedbackTimeoutRef.current);
-      feedbackTimeoutRef.current = null;
-    }
-  };
-
-  const showStatusFeedback = (feedback) => {
-    if (!mountedRef.current) return;
-    clearFeedbackTimeout();
-    setStatusFeedback(feedback);
-
-    if (feedback?.autoDismissMs) {
-      feedbackTimeoutRef.current = setTimeout(() => {
-        setStatusFeedback((current) => (current === feedback ? null : current));
-        feedbackTimeoutRef.current = null;
-      }, feedback.autoDismissMs);
-    }
-  };
+  const { clearFeedbackTimeout, showStatusFeedback } = useManifestStatusFeedback(mountedRef, setStatusFeedback);
 
   const loadManifest = useCallback(async () => {
     const requestSeq = ++manifestLoadSeqRef.current;
@@ -88,7 +71,8 @@ export default function PassengerManifestController({ route, navigation, driverT
       const data = await getTourManifest(tourId);
       if (!canApplyRequest()) return null;
       const cacheResult = cacheScopeEnabled
-        ? await driverManifestCache.replace({ tourId, driverId: offlineCacheOwnerId, manifest: data })
+        ? await driverManifestCache.replace({ tourId, driverId: offlineCacheOwnerId, manifest: data, isCurrent: canApplyRequest,
+            pendingActions: () => offlineSyncService.getQueuedActions({ scope: manifestQueueScope }) })
         : null;
       if (cacheScopeEnabled && !cacheResult.success) {
         logger.warn('PassengerManifest', 'Remote manifest was not cached because it failed strict local validation', {
@@ -126,7 +110,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         setRefreshing(false);
       }
     }
-  }, [cacheScopeEnabled, offlineCacheOwnerId, scopeKey, tourId]);
+  }, [cacheScopeEnabled, offlineCacheOwnerId, scopeKey, tourId, manifestQueueScope]);
 
   const handleRefresh = async () => {
     logger.info('PassengerManifest', 'Pull refresh started', { tourId });
@@ -137,6 +121,8 @@ export default function PassengerManifestController({ route, navigation, driverT
   useEffect(() => {
     activeScopeKeyRef.current = scopeKey;
     manifestLoadSeqRef.current += 1;
+    setManifestData({ bookings: [], stats: {} }); setManifestConflict(null); setStatusFeedback(null);
+    setLoading(true); manifestSourceRef.current = 'none'; setManifestSource('none');
     let cancelled = false;
     const loadCacheThenRemote = async () => {
       const cached = cacheScopeEnabled
@@ -144,6 +130,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         : { success: true, data: null };
       if (!cancelled && activeScopeKeyRef.current === scopeKey && cached.success && cached.data) {
         setManifestData(cached.data);
+        if (cached.data.lastReconciliation) setManifestConflict(cached.data.lastReconciliation);
         manifestSourceRef.current = 'cache';
         setManifestSource('cache');
         setLoading(false);
@@ -158,30 +145,24 @@ export default function PassengerManifestController({ route, navigation, driverT
   }, [cacheScopeEnabled, loadManifest, offlineCacheOwnerId, scopeKey, tourId]);
 
   useEffect(() => {
+    if (!cacheScopeEnabled) return undefined;
+    return driverManifestCache.subscribe({ tourId, driverId: offlineCacheOwnerId }, ({ snapshot, reason }) => {
+      if (!mountedRef.current || activeScopeKeyRef.current !== scopeKey) return;
+      if (reason === 'reconciliation') manifestLoadSeqRef.current += 1;
+      setManifestData(snapshot); setLoading(false); setRefreshing(false);
+      if (reason === 'reconciliation') setManifestConflict(snapshot.lastReconciliation || null);
+      if (snapshot.lastReconciliation) {
+        setManifestConflict(snapshot.lastReconciliation);
+        showStatusFeedback({ variant: 'warning', message: `Booking ${snapshot.lastReconciliation.bookingRef} kept the newer server status. Review the protected update below.` });
+      }
+    });
+  }, [cacheScopeEnabled, offlineCacheOwnerId, scopeKey, showStatusFeedback, tourId]);
+
+  useEffect(() => {
     const activeTourId = normalizeTourId(tourId);
     const unsubscribe = offlineSyncService.subscribeQueuedActions((actions = []) => {
       if (!mountedRef.current) return;
-      const scopedActions = actions.filter((action) => (
-        action.type === 'MANIFEST_UPDATE'
-        && normalizeTourId(action.tourId) === activeTourId
-      ));
-      const stats = scopedActions.reduce((summary, action) => {
-        if (action.status === 'syncing') summary.syncing += 1;
-        else if (action.status === 'failed') summary.failed += 1;
-        else summary.pending += 1;
-        summary.total += 1;
-        return summary;
-      }, { pending: 0, syncing: 0, failed: 0, total: 0 });
-      const statePriority = { synced: 0, queued: 1, syncing: 2, failed: 3 };
-      const syncMap = {};
-      scopedActions.forEach((action) => {
-        const bookingRef = action.payload?.bookingRef;
-        if (!bookingRef) return;
-        const nextState = normalizeSyncState(action.status);
-        const currentState = syncMap[bookingRef] || 'synced';
-        if (statePriority[nextState] >= statePriority[currentState]) syncMap[bookingRef] = nextState;
-      });
-
+      const { stats, syncMap } = summarizeManifestQueue(actions, activeTourId);
       setQueueStats(stats);
       setBookingSyncState(syncMap);
       logger.debug('PassengerManifest', 'Scoped manifest queue state updated', {
@@ -199,7 +180,7 @@ export default function PassengerManifestController({ route, navigation, driverT
     mountedRef.current = false;
     manifestLoadSeqRef.current += 1;
     clearFeedbackTimeout();
-  }, []);
+  }, [clearFeedbackTimeout]);
 
   const {
     activeQueueCount,
@@ -263,6 +244,7 @@ export default function PassengerManifestController({ route, navigation, driverT
 
   const submitUpdate = async (passengerStatuses) => {
     if (!selectedBooking) return;
+    const canApply = () => mountedRef.current && activeScopeKeyRef.current === scopeKey;
 
     try {
       setActionLoading(true);
@@ -285,7 +267,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         actorPrincipalId,
         authUid,
       });
-      if (!mountedRef.current) return;
+      if (!canApply()) return;
       logger.info('PassengerManifest', 'Manifest update result received', {
         tourId,
         bookingRef: maskIdentifier(selectedBooking.id),
@@ -315,7 +297,7 @@ export default function PassengerManifestController({ route, navigation, driverT
           result?.status || statusesToPersist[index] || MANIFEST_STATUS.PENDING
         ));
       const appliedStatus = result?.status || result?.localStatus || MANIFEST_STATUS.PENDING;
-      setManifestData((current) => ({
+      if (!cacheScopeEnabled) setManifestData((current) => ({
         ...current,
         bookings: current.bookings.map((booking) => (
           booking.id === selectedBooking.id
@@ -330,15 +312,26 @@ export default function PassengerManifestController({ route, navigation, driverT
         )),
       }));
       const cachePatch = cacheScopeEnabled
-        ? await driverManifestCache.applyOptimisticUpdate({
+        ? result?.queued
+          ? await driverManifestCache.applyQueuedUpdate({ scope: manifestQueueScope, actionId: result.idempotencyKey, isCurrent: canApply })
+          : await driverManifestCache.applyOptimisticUpdate({
           tourId,
           driverId: offlineCacheOwnerId,
           bookingRef: selectedBooking.id,
           passengerStatuses: appliedPassengerStatuses,
           passengerIds: selectedBooking.passengerIds,
-          rosterRevision: selectedBooking.rosterRevision,
+          rosterRevision: selectedBooking.rosterRevision, isCurrent: canApply,
+          conflict: result?.conflict, reason: 'reconciliation',
         })
         : null;
+      if (!canApply()) return;
+      if (cachePatch?.success && cachePatch.data) setManifestData(cachePatch.data);
+      if (result.queued && cachePatch?.queued === false) {
+        result.queued = false;
+        setBookingSyncState(prev => ({ ...prev, [selectedBooking.id]: normalizeSyncState('synced') }));
+        result.conflict = cachePatch.data?.lastReconciliation || null;
+        if (result.conflict) setManifestConflict(result.conflict);
+      }
       if (cacheScopeEnabled && !cachePatch.success) {
         logger.warn('PassengerManifest', 'Manifest update could not be mirrored to the local snapshot', {
           tourId,
@@ -363,7 +356,7 @@ export default function PassengerManifestController({ route, navigation, driverT
       }
 
       const refreshedManifest = await loadManifest();
-      if (!mountedRef.current) return;
+      if (!canApply()) return;
       if (refreshedManifest) {
         const afterStats = computeStats(refreshedManifest.bookings || []);
         const unresolvedCount = getUnresolvedBookingCount(refreshedManifest.bookings || []);
@@ -398,6 +391,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         });
       }
     } catch (error) {
+      if (!canApply()) return;
       logger.error('PassengerManifest', 'Manifest update failed', {
         tourId,
         bookingRef: maskIdentifier(selectedBooking?.id),
@@ -415,7 +409,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         } : () => submitUpdate(passengerStatuses),
       });
     } finally {
-      if (mountedRef.current) {
+      if (canApply()) {
         setActionLoading(false);
       }
     }
@@ -439,6 +433,7 @@ export default function PassengerManifestController({ route, navigation, driverT
 
 
   const handleSyncNow = async ({ isManualRefresh = false } = {}) => {
+    const canApply = () => mountedRef.current && activeScopeKeyRef.current === scopeKey;
     if (!isManualRefresh) {
       setRefreshing(true);
     }
@@ -449,7 +444,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         message: 'You are offline. Boarding changes stay safely queued on this device and will sync after reconnection.',
         autoDismissMs: 5000,
       });
-      if (mountedRef.current) setRefreshing(false);
+      if (canApply()) setRefreshing(false);
       return;
     }
 
@@ -462,7 +457,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         services: { bookingService, chatService },
         scope: manifestQueueScope || undefined,
       });
-      if (!mountedRef.current) return;
+      if (!canApply()) return;
       logger.info('PassengerManifest', 'Manifest sync replay completed', {
         tourId,
         isManualRefresh,
@@ -501,7 +496,7 @@ export default function PassengerManifestController({ route, navigation, driverT
       }
 
       const queued = await offlineSyncService.getQueuedActions({ scope: manifestQueueScope || undefined });
-      if (!mountedRef.current) return;
+      if (!canApply()) return;
       if (queued.success) {
         const scopedManifestActions = queued.data.filter((action) => (
           action.type === 'MANIFEST_UPDATE'
@@ -531,7 +526,7 @@ export default function PassengerManifestController({ route, navigation, driverT
             onCtaPress: () => setStatusFilter(MANIFEST_STATUS.PENDING),
             autoDismissMs: 5000,
           });
-        } else {
+        } else if (!reconciledOutcome) {
           showStatusFeedback({
             variant: 'success',
             message: 'Sync complete. All clear.',
@@ -542,6 +537,7 @@ export default function PassengerManifestController({ route, navigation, driverT
 
       await loadManifest();
     } catch (error) {
+      if (!canApply()) return;
       logger.error('PassengerManifest', 'Manifest sync failed unexpectedly', {
         tourId,
         isManualRefresh,
@@ -554,7 +550,7 @@ export default function PassengerManifestController({ route, navigation, driverT
         onCtaPress: () => handleSyncNow(),
       });
     } finally {
-      if (mountedRef.current) {
+      if (canApply()) {
         setRefreshing(false);
       }
     }

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { initializeTestEnvironment, assertFails } = require('@firebase/rules-unit-testing');
-const { reconcileDriverLocationProjection } = require('../../functions/lib/driverLocationProjection');
+const { driverAuthorityUpdates, sessionIdFor } = require('./sessionFixtures');
 const { buildAssignmentOwnedDriverLocationPickup } = require('../../functions/lib/driverLocationPickup');
 
 const PROJECT_ID = 'demo-llt-location-service';
@@ -11,8 +11,8 @@ const TOUR = 'TOUR_LOCATION';
 const DRIVER = 'D-LOCATION';
 const UID_A = 'location-driver-a';
 const UID_B = 'location-driver-b';
-const SID_A = `sess_v1_${'a'.repeat(32)}`;
-const SID_B = `sess_v1_${'b'.repeat(32)}`;
+const SID_A = sessionIdFor(UID_A);
+const SID_B = sessionIdFor(UID_B);
 let environment;
 let databaseURL;
 let service;
@@ -42,105 +42,46 @@ test.beforeEach(async () => {
   const now = Date.now();
   const records = {
     'driver_login_policy/v1': { schemaVersion: 1, enforceSingleDevice: false, generation: 0, revision: 1, updatedAtMs: now },
-    [`drivers/${DRIVER}`]: { authUid: UID_A, currentTourId: TOUR, name: 'Synthetic driver' },
+    [`drivers/${DRIVER}/name`]: 'Synthetic driver',
     [`tours/${TOUR}`]: { name: 'Synthetic tour', driverId: DRIVER, driverAssignmentRevision: 7 },
     [`tour_manifests/${TOUR}/assigned_drivers/${DRIVER}`]: true,
   };
-  for (const [uid, sid] of [[UID_A, SID_A], [UID_B, SID_B]]) {
-    records[`users/${uid}`] = { principalType: 'driver', driverId: DRIVER,
-      driverPrincipalId: `driver:${DRIVER}`, driverAssignedTourId: TOUR };
-    records[`app_sessions/${uid}`] = { schemaVersion: 1, sessionId: sid, authUid: uid,
-      principalId: `driver:${DRIVER}`, principalType: 'driver', tourId: TOUR, driverId: DRIVER,
-      driverLoginPolicyGeneration: 0, status: 'active', issuedAtMs: now,
-      lastAuthenticatedAtMs: now, expiresAtMs: now + 3600000, sessionRevision: 1 };
-  }
+  for (const uid of [UID_A, UID_B]) Object.assign(records, driverAuthorityUpdates({ uid, driverId: DRIVER, tourId: TOUR, nowMs: now }));
   await trusted(async db => { await db.ref().set(null); await db.ref().update(records); });
 });
 
-test('real write-only service publishes and withdraws with server acknowledgements; projection becomes a tombstone', async () => {
-  const db = client(UID_A);
-  const live = 'loc_service_first';
-  const published = await publish(db, UID_A, SID_A, live);
-  assert.equal(published.publicationAcknowledged, true);
-  assert.equal(published.storedLocation, null);
-  assert.match(published.timestampSource, /^(server|client)_estimate$/);
-  await assertFails(db.ref(key(SID_A, live)).once('value'));
-  await trusted(async admin => {
-    const source = (await admin.ref(key(SID_A, live)).get()).val();
-    assert.equal(typeof source.timestamp, 'number');
-    assert.ok(Math.abs(source.timestamp - Date.now()) < 60000);
-    const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-    assert.equal(result.projection.latitude, 56.1);
-    for (const field of ['authUid', 'appSessionId', 'liveSharingSessionId', 'driverId']) {
-      assert.equal(Object.hasOwn(result.projection, field), false);
-    }
-  });
-  assert.equal((await withdraw(db, SID_A, live)).withdrawalAcknowledged, true);
-  assert.equal((await withdraw(db, SID_A, live)).withdrawalAcknowledged, true);
-  await trusted(async admin => {
-    assert.equal((await admin.ref(key(SID_A, live)).get()).exists(), false);
-    const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-    assert.equal(result.projection, null);
-    assert.equal((await admin.ref(`tours/${TOUR}/driverLocation`).get()).val().isSharing, false);
-  });
+test('legacy automatic publication is denied even for a fully authorized driver', async () => {
+  await assert.rejects(publish(client(UID_A), UID_A, SID_A, 'legacy_auto'), { code: 'EXPLICIT_TRACKING_REQUIRED' });
+  const now = Date.now();
+  await assertFails(client(UID_A).ref(key(SID_A, 'legacy_auto')).set({ schemaVersion: 2, isSharing: true, mode: 'live', source: 'auto',
+    latitude: 56, longitude: -4, accuracy: 10, timestamp: now, cleanupAtMs: now + 30 * 60 * 1000,
+    authUid: UID_A, appSessionId: SID_A, liveSharingSessionId: 'legacy_auto', driverId: DRIVER, tourId: TOUR }));
+  await trusted(async db => assert.equal((await db.ref(key(SID_A, 'legacy_auto')).get()).exists(), false));
 });
 
-test('stopping an old live session preserves another handset and the assignment-owned pickup fallback', async () => {
-  const a = client(UID_A); const b = client(UID_B);
-  await trusted(admin => admin.ref(`driver_location_pickups/${TOUR}`).set(buildAssignmentOwnedDriverLocationPickup({
-    driverId: DRIVER, tourId: TOUR, assignmentRevision: 7,
-    location: { latitude: 55.9, longitude: -4.1, accuracy: 8 },
-  })));
-  await publish(a, UID_A, SID_A, 'loc_service_old');
-  await publish(b, UID_B, SID_B, 'loc_service_new', 56.2);
-  await assertFails(a.ref(key(SID_B, 'loc_service_new')).remove());
-  await withdraw(a, SID_A, 'loc_service_old');
-  await trusted(async admin => {
-    assert.equal((await admin.ref(key(SID_B, 'loc_service_new')).get()).exists(), true);
-    const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-    assert.equal(result.projection.latitude, 56.2);
+test('real SDK withdrawal cleans the exact retired leaf without reading private coordinates', async () => {
+  await trusted(db => db.ref(key(SID_A, 'loc_retired_001')).set({ authUid: UID_A, appSessionId: SID_A, driverId: DRIVER, liveSharingSessionId: 'loc_retired_001', tourId: TOUR, latitude: 56 }));
+  const db = client(UID_A);
+  await assertFails(db.ref(key(SID_A, 'loc_retired_001')).once('value'));
+  assert.equal((await withdraw(db, SID_A, 'loc_retired_001')).withdrawalAcknowledged, true);
+  assert.equal((await withdraw(db, SID_A, 'loc_retired_001')).withdrawalAcknowledged, true);
+  await trusted(async admin => assert.equal((await admin.ref(key(SID_A, 'loc_retired_001')).get()).exists(), false));
+});
+
+test('a stale compatibility cleanup cannot delete another handset or its assignment pickup', async () => {
+  await trusted(async db => {
+    await db.ref(key(SID_A, 'loc_old_001')).set({ authUid: UID_A, appSessionId: SID_A, driverId: DRIVER, liveSharingSessionId: 'loc_old_001', tourId: TOUR });
+    await db.ref(key(SID_B, 'loc_current_001')).set({ authUid: UID_B, appSessionId: SID_B, driverId: DRIVER, liveSharingSessionId: 'loc_current_001', tourId: TOUR });
+    await db.ref(`driver_location_pickups/${TOUR}`).set(buildAssignmentOwnedDriverLocationPickup({ driverId: DRIVER, tourId: TOUR, assignmentRevision: 7, location: { latitude: 56, longitude: -4 } }));
   });
-  await withdraw(b, SID_B, 'loc_service_new');
+  const db = client(UID_A);
+  await assertFails(db.ref(key(SID_B, 'loc_current_001')).remove());
+  await withdraw(db, SID_A, 'loc_old_001');
   await trusted(async admin => {
-    const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-    assert.equal(result.projection.mode, 'pickup');
-    assert.equal(result.projection.latitude, 55.9);
+    assert.equal((await admin.ref(key(SID_B, 'loc_current_001')).get()).exists(), true);
     assert.equal((await admin.ref(`driver_location_pickups/${TOUR}`).get()).exists(), true);
   });
 });
 
-for (const [reason, update] of [
-  ['logout', () => ({ [`app_sessions/${UID_A}/status`]: 'ended' })],
-  ['revocation', () => ({ [`app_sessions/${UID_A}/status`]: 'revoked' })],
-  ['expiry', () => ({ [`app_sessions/${UID_A}/expiresAtMs`]: Date.now() - 1000 })],
-  ['reassignment', () => ({ [`tour_manifests/${TOUR}/assigned_drivers/${DRIVER}`]: null })],
-]) test(`${reason} denies successful client publication/withdrawal and excludes retained sources from the public projection`, async () => {
-  const db = client(UID_A);
-  await publish(db, UID_A, SID_A, 'loc_service_revoked');
-  await trusted(admin => admin.ref().update(update()));
-  await assert.rejects(publish(db, UID_A, SID_A, 'loc_service_revoked'));
-  await assert.rejects(withdraw(db, SID_A, 'loc_service_revoked'));
-  await trusted(async admin => {
-    const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-    assert.equal(result.projection, null);
-    assert.equal((await admin.ref(`tours/${TOUR}/driverLocation`).get()).val().isSharing, false);
-  });
-});
-
-test('the armed disconnect handler actually removes its private live source', async () => {
-  const db = client(UID_A);
-  const live = 'loc_service_disconnect';
-  await publish(db, UID_A, SID_A, live);
-  db.goOffline();
-  try {
-    await trusted(async admin => {
-      const deadline = Date.now() + 10000;
-      while ((await admin.ref(key(SID_A, live)).get()).exists()) {
-        assert.ok(Date.now() < deadline, 'disconnect cleanup must remove the source');
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      const result = await reconcileDriverLocationProjection({ database: admin, tourId: TOUR });
-      assert.equal(result.projection, null);
-    });
-  } finally { db.goOnline(); }
-});
+// Explicit start, native controller, independent authenticated REST, delayed replay,
+// stop tombstones and projection acceptance remain covered by driverTrackingService.rules.test.js.

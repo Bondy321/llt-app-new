@@ -2,7 +2,7 @@ const {
   MANIFEST_STATUS,
   auth,
   buildDriverAssignmentEndpointUrl,
-  fetchWithTimeout,
+  fetchJsonWithTimeout,
   getFirebaseAuthHeaderValue,
   logBookingEvent,
   logger,
@@ -398,14 +398,18 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
       || currentAppSession.driverId !== validatedDriverId) {
       throw new Error('Your secure driver session has ended. Sign in again before assigning a tour.');
     }
+    if (auth.currentUser !== currentUser) {
+      throw new Error('Your installation changed while assigning the tour. Sign in again.');
+    }
 
-    let response;
+    let response; let payload;
     try {
-      response = await fetchWithTimeout(endpoint, {
+      ({ response, payload } = await fetchJsonWithTimeout(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${firebaseAuthResult.token}`,
+          ...(firebaseAuthResult.appCheck ? { 'X-Firebase-AppCheck': firebaseAuthResult.appCheck } : {}),
         },
         body: JSON.stringify({
           operation: 'assign',
@@ -415,15 +419,17 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
           expectedSessionRevision: currentAppSession.sessionRevision,
           idempotencyKey: `driver-assignment:${currentAppSession.sessionId}:${currentAppSession.sessionRevision}:${sanitizeTourId(validatedTourCode)}`,
         }),
-      });
+      }));
     } catch (error) {
+      if (error?.code === 'AUTH_USER_CHANGED') {
+        throw new Error('Your installation changed while assigning the tour. Sign in again.');
+      }
       if (error?.name === 'AbortError') {
         throw new Error('The assignment request timed out. Check your connection and try again.');
       }
       throw new Error('The assignment service could not be reached. Check your connection and try again.');
     }
 
-    const payload = await response.json().catch(() => null);
     if (!payload) {
       throw new Error('The assignment service returned an unexpected response. Please try again.');
     }
@@ -433,7 +439,7 @@ const assignDriverToTour = async (driverId, tourCode, options = {}) => {
     if (!response.ok || payload.success !== true) {
       throw new Error(mapDriverAssignmentReason(payload.reason));
     }
-    if (auth.currentUser?.uid !== assignmentAuthUid) {
+    if (auth.currentUser !== currentUser) {
       throw new Error('Your installation changed while assigning the tour. Sign in again.');
     }
 

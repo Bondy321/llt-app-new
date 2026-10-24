@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`app_sessions/{authUid}` is the only authority that turns a persistent Firebase Auth account into a currently authorised mobile-app session. Firebase Auth, a passenger participant row, a driver identity mapping, an assignment, or a push token is never sufficient on its own.
+`app_sessions/{authUid}` and its exact committed `app_session_authority/{authUid}` epoch jointly establish a currently authorised mobile-app session. Firebase Auth, a canonical session without its committed epoch, a passenger participant row, a driver identity mapping, an assignment, or a push token is never sufficient on its own.
 
-Normal logout deliberately preserves the Firebase Auth UID and opaque passenger binding. Each phone can independently verify the same booking reference/email and receive its own app session, sharing the booking's stable passenger principal. Private version-2 device authorizations are additive; logout or revocation of one session does not affect another phone. Legacy single-UID records are atomically promoted on verified login, while explicit security locks remain enforced. See the [stable identity contract](../stable-identity-rollout-checklist.md).
+Normal logout deliberately preserves the Firebase Auth UID and opaque passenger binding. Each phone can independently verify the same booking reference/email and receive its own app session, sharing the booking's stable passenger principal. Private version-2 device authorizations are additive; logout or revocation of one session does not affect another phone. Legacy scalar ownership never grants access. Fresh credential verification enrols only the requesting UID in the supported version-2 map; explicit security locks remain enforced. See the [stable identity contract](../stable-identity-rollout-checklist.md).
 
 ## Canonical session
 
@@ -36,7 +36,7 @@ Invariants:
 - Driver `principalId` is exactly `driver:{driverId}`.
 - Passenger and assigned-driver sessions normally expire after 12 hours. A valid unassigned-driver session expires after one hour. Every TTL is bounded between five minutes and 24 hours.
 - Clients may read only their own record and cannot write any field.
-- `driverLoginPolicyGeneration` is server-only and binds driver sessions to the current device-policy generation. Legacy generation-less driver sessions are generation zero only before the first policy record is written.
+- `driverLoginPolicyGeneration` is server-only and binds driver sessions to the explicit current device-policy generation. Missing policy records or generation-less sessions fail closed; zero is not an inferred compatibility generation.
 - `app_session_locks`, `app_session_events`, and
   `app_session_role_claim_jobs` are server-private.
 - `account_deletion_active/v1/{authUid}` is a separate non-expiring server-owned barrier. Session
@@ -95,11 +95,12 @@ Driver tour access requires all of the following to agree:
 - active, non-expired `app_sessions/{authUid}` driver session;
 - session `driverId`, `principalId`, and `tourId`;
 - `users/{authUid}/driverId` and current assigned tour;
-- current `driver_login_policy/v1` generation;
+- explicit current `driver_login_policy/v1` generation (missing generations fail closed);
+- exact private staff device approval, current staff generation and committed installation authority;
 - `drivers/{driverId}/authUid` only while single-device enforcement is enabled;
 - `tour_manifests/{tourId}/assigned_drivers/{driverId}`.
 
-An operational assignment remains after logout but cannot grant mobile access. With enforcement off, several verified handsets may hold independent sessions for the same driver. The server-owned assignment mutation finds every active current-generation driver session and updates each session revision, authentication time, bounded expiry, user assignment helper, and notification-device operational tour. With enforcement on it preserves only the claimed UID and queues exact cleanup for obsolete sessions. See `driver-login-policy.md` and `driver-assignment.md`.
+An operational assignment remains after logout but cannot grant mobile access. With enforcement off, several independently enrolled handsets may hold sessions for the same driver. Public driver ID alone never authorises a handset. Explicit logout or switching roles requires a new approved enrolment before returning to driver mode. The server-owned assignment mutation finds every active current-generation driver session and updates each session revision, authentication time, bounded expiry, user assignment helper, and notification-device operational tour. With enforcement on it preserves only the claimed UID and queues exact cleanup for obsolete sessions. See `driver-login-policy.md` and `driver-assignment.md`.
 
 ## Session state transitions
 
@@ -129,14 +130,15 @@ coherent. Exact-session logout/revoke admissions use the same condition. Stop an
 other non-mutating admissions can read missing, malformed or inactive canonical
 state without creating or repairing authority; their own domain still requires
 exact retained proof before retiring any publication.
-Passenger and driver login handlers declare a 60-second timeout; their
-three-minute issuance lease exceeds that invocation deadline. Issuance renews
-after its final barrier reads and checks the live clock again immediately before
-dispatching its atomic authority update. That root update retains the existing
-atomic issuance contract; it is not an independently compare-and-set root write.
-An arbitrary delayed in-flight issuance update beyond its lease remains a
-separate limitation, unlike the cleanup CAS which rejects arbitrary stale resumes
-at the actual mutation boundary.
+Passenger and driver login handlers retain admission leases, but publication is
+additionally fenced at the actual server commit through the supported limited-
+privilege Admin SDK connection. A bounded private `app_session_authority/{uid}`
+record captures the predecessor epoch, prepared operation and exact write manifest.
+Rules reject an old queued operation after a successor, logout or deletion even if
+its original connection reconnects later. All canonical and derived authority is
+published atomically; no root transaction is used. See
+[staff device enrolment](staff-device-enrolment.md) for the commit protocol and SDK
+regression acceptance. Lease expiry alone is not the commit fence.
 
 Cleanup compares the captured complete authority, fenced revision and live lease
 expiry inside the canonical session transaction. It first marks the captured
@@ -155,7 +157,7 @@ cannot duplicate the event. An audit write failure therefore retains `ending`
 retry scope. Such an event records retirement of the captured old authority; it
 never identifies a replacement session as expired or ended.
 
-Issuance atomically tags `users/{uid}/appSessionId`, passenger access grants'
+The rules-mediated issuance commit atomically tags `users/{uid}/appSessionId`, passenger access grants'
 `sessionId`, and an existing notification device's `authoritySessionId` with the
 new session, and installs its new canonical session/revision in the held lock.
 Profile token cleanup, grants, membership and device eligibility use bounded
@@ -168,7 +170,7 @@ preserved. The pure atomic cleanup-update builder remains reserved for workflows
 which already own a stronger serialized reservation, including account deletion
 and session replacement; asynchronous ordinary cleanup uses the fenced protocol.
 
-`endAppSession` requires Auth, `POST`, `reason=user_logout`, and the exact expected session ID. App Check is currently explicitly disabled. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
+`endAppSession` requires Auth, production App Check, `POST`, `reason=user_logout`, and the exact expected session ID. A missing session is idempotent success. A different current session returns `SESSION_CHANGED`, so a delayed Session A logout cannot end Session B.
 
 Cleanup removes exact-owned session authority and ephemeral state: the session,
 passenger membership and tagged grants, per-session typing/presence sources,
@@ -188,9 +190,9 @@ destructive work. The captured session is revoked during reservation; all later 
 server-derived scope and remain resumable after the original Firebase Auth user is removed.
 
 Passenger and driver session issuance check the barrier at the same serialized authority boundary used
-for session creation. No new session may race or replace an accepted deletion. Missing rollout state is
-compatibility, malformed rollout state fails closed, and `server_only` is reserved for a separate later
-cutover.
+for session creation. No new session may race or replace an accepted deletion. The sole supported
+deletion contract is `server_only`, including the missing-record default. Explicit compatibility,
+malformed or unknown rollout records fail closed. Direct client deletion is retired.
 
 Normal logout preservation remains unchanged. Explicit deletion additionally compare-removes the
 captured passenger binding/security UID or driver scalar, UID account/log/notification records and
@@ -206,7 +208,7 @@ The safe session subset is stored at `@LLT:appSession:v1`; it contains no creden
 Logout is two-phase:
 
 1. Persist the exact pending session-end request before network I/O.
-2. Call `endAppSession` with Firebase Auth and `expectedSessionId`; attach App Check only when its rollout is enabled.
+2. Call `endAppSession` with Firebase Auth, App Check and `expectedSessionId`; production admission requires valid attestation.
 3. Only confirmed idempotent server success permits the normal logged-out state.
 4. Offline or transient failure enters the blocking `LogoutPendingScreen`; no tour UI is restored. Retry survives a force-close.
 5. `SESSION_CHANGED` cannot clear a newer session and requires secure reauthentication.
@@ -215,9 +217,9 @@ Local cleanup stops replay and removes scoped tour packs, offline actions and lo
 
 ## Media and notifications
 
-All direct client reads and writes under `group_tour_photos/**` and `private_tour_photos/**` in Firebase Storage are denied. The mobile service sends Auth to server endpoints for upload, delete, and short-lived URL resolution, and may add App Check after its future rollout. Each refresh rechecks the active session and current tour authority. RTDB photo records contain Storage paths, not durable Firebase download URLs.
+All direct client reads and writes under `group_tour_photos/**` and `private_tour_photos/**` in Firebase Storage are denied. The mobile service sends Auth and App Check to server endpoints for upload, delete, and short-lived URL resolution. Each refresh rechecks the committed session and current tour authority. RTDB photo records contain Storage paths, not durable Firebase download URLs.
 
-Operational notification selection requires an active matching app session in addition to a participant or driver assignment, and logout authoritatively marks the profile push token unavailable. Marketing delivery still requires consent and an active token, so an ended session is not eligible.
+Operational notification selection requires a committed matching app session in addition to a participant or approved driver assignment. Exact tagged logout retires operational ownership without changing a successor. Marketing delivery is separate: explicit stored consent may support a current logged-out marketing registration; an ended operational session alone grants no marketing eligibility.
 
 ## Operations
 

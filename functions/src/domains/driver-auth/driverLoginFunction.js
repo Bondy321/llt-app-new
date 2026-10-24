@@ -20,6 +20,8 @@ const {
   releaseDriverAssignmentLoginAdmission,
   resolveDriverAssignment,
 } = require('../driver-assignment/public');
+const { redeemStaffEnrolment } = require('./staffEnrolment');
+const { captureInstallationAuthority } = loadLegacyLibrary('sessionPublicationAuthority');
 const { authorizeDriverLoginSecurity } = require('./driverLoginSecurity');
 const {
   acquireDriverLoginAdmission,
@@ -43,7 +45,7 @@ const resolveAssignmentStatus = (assignedTourId, resolvedTour) => {
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const loadAuthorizedDriver = async ({ db, driverId, authUid, policy }) => {
+const loadAuthorizedDriver = async ({ db, driverId, authUid, policy, staffGeneration }) => {
   const driverSnapshot = await db.ref(`drivers/${driverId}`).once('value');
   if (!driverSnapshot.exists()) {
     log.warn('Driver login rejected: driver not found', {
@@ -52,7 +54,7 @@ const loadAuthorizedDriver = async ({ db, driverId, authUid, policy }) => {
     return { allowed: false, status: 200, reason: 'DRIVER_NOT_FOUND' };
   }
   const driverData = driverSnapshot.val() || {};
-  if (!driverLoginClaimAllowedByPolicy({ policy, authUid, claimedAuthUid: driverData.authUid })) {
+  if (!driverLoginClaimAllowedByPolicy({ policy, authUid, claimedAuthUid: driverData.authUidStaffGeneration === staffGeneration ? driverData.authUid : null })) {
     log.warn('Driver login rejected: driver code already linked to another auth uid', {
       driverId, authUidHash: hashPolicyIdentifier(authUid),
     });
@@ -123,7 +125,10 @@ const verifyDriverLogin = onRequestWithResult(
     let assignmentLoginAdmission = null;
 
     try {
+      const capturedAuthority = await captureInstallationAuthority({ db, authUid: requestAuth.uid });
       await ensureNoActiveAccountDeletion({ db, authUid: requestAuth.uid });
+      const staffAuthorization = await redeemStaffEnrolment({ db, authUid: requestAuth.uid, driverId,
+        secret: req.body?.enrolmentSecret, capturedAuthority });
       assignmentLoginAdmission = await acquireDriverAssignmentLoginAdmission({
         db,
         driverId,
@@ -148,7 +153,7 @@ const verifyDriverLogin = onRequestWithResult(
       }
       const policy = admission.policy;
       const driverAccess = await loadAuthorizedDriver({
-        db, driverId, authUid: requestAuth.uid, policy,
+        db, driverId, authUid: requestAuth.uid, policy, staffGeneration: staffAuthorization.generation,
       });
       if (!driverAccess.allowed) {
         return res.status(driverAccess.status).json({ valid: false, reason: driverAccess.reason });
@@ -165,7 +170,7 @@ const verifyDriverLogin = onRequestWithResult(
           return res.status(409).json({ valid: false, reason: 'DRIVER_LOGIN_IN_PROGRESS' });
         }
         const latestDriver = (await db.ref(`drivers/${driverId}`).once('value')).val() || {};
-        if (!driverLoginClaimAllowedByPolicy({ policy, authUid: requestAuth.uid, claimedAuthUid: latestDriver.authUid })) {
+        if (!driverLoginClaimAllowedByPolicy({ policy, authUid: requestAuth.uid, claimedAuthUid: latestDriver.authUidStaffGeneration === staffAuthorization.generation ? latestDriver.authUid : null })) {
           return res.status(403).json({ valid: false, reason: 'DRIVER_ALREADY_LINKED' });
         }
       }
@@ -183,6 +188,7 @@ const verifyDriverLogin = onRequestWithResult(
       });
       if (policy.enforceSingleDevice) {
         driverProfileUpdates[`drivers/${driverId}/authUid`] = requestAuth.uid;
+        driverProfileUpdates[`drivers/${driverId}/authUidStaffGeneration`] = staffAuthorization.generation;
         driverProfileUpdates[claimReservation.path] = null;
       }
       const appSession = await issueDriverAppSession({
@@ -191,6 +197,12 @@ const verifyDriverLogin = onRequestWithResult(
         driverId,
         tourId: assignment.assignedTourId,
         driverLoginPolicyGeneration: policy.generation,
+        staffAuthorization: { ...staffAuthorization,
+          assignmentAdmissionId: assignmentLoginAdmission.admissionId,
+          policyAdmissionId: admission.admissionId,
+          admissionAuthUidHash: hashPolicyIdentifier(requestAuth.uid),
+          admissionPolicyRevision: policy.revision },
+        capturedAuthority,
         profileUpdates: driverProfileUpdates,
         nowMs,
       });
@@ -232,6 +244,9 @@ const verifyDriverLogin = onRequestWithResult(
       });
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error)?.code;
+      if (['STAFF_ENROLMENT_REQUIRED', 'STAFF_ENROLMENT_INVALID', 'STAFF_POLICY_INVALID', 'SESSION_CHANGED'].includes(code)) {
+        return res.status(403).json({ valid: false, reason: code });
+      }
       if (code === 'ACCOUNT_DELETION_IN_PROGRESS') {
         return res.status(409).json({ valid: false, reason: 'ACCOUNT_DELETION_IN_PROGRESS' });
       }

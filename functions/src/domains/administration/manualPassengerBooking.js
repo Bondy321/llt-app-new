@@ -20,11 +20,13 @@ const readManualSourceRosterControl = async (ref) => {
 };
 
 /** Acquire the same private lease used by source roster publication. */
-const acquireManualSourceRosterLease = async ({ db, tourId, owner, nowMs = Date.now() }) => {
+const acquireManualSourceRosterLease = async ({ db, tourId, owner, allowDeleted = false, allowDeleting = false, nowMs = Date.now() }) => {
   const ref = db.ref(`sync_roster_control/${tourId}`);
   await readManualSourceRosterControl(ref);
   const result = await ref.transaction((current) => {
     const state = current && typeof current === 'object' ? current : {};
+    if ((!allowDeleted && state.lifecycle?.state === 'deleted')
+      || (!allowDeleting && state.lifecycle?.state === 'deleting')) return current;
     if (state.owner && Number(state.leaseUntilMs) > nowMs && state.owner !== owner) return current;
     return { ...state, owner, leaseUntilMs: nowMs + SOURCE_ROSTER_LOCK_TTL_MS };
   }, undefined, false);

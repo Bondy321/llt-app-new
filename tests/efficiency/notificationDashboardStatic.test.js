@@ -22,16 +22,18 @@ test('notification worker delegates discovery to the explicit scoped enumerator'
 
 test('indexed notification delivery retains canonical authority rereads', () => {
   const authority = read('functions/src/domains/notifications/notificationAudiencePage.js');
+  const sessionAccess = read('functions/lib/appSessionAccess.js');
+  assert.match(authority, /verifyActiveAppSession\(\{ db: measuredDb, authUid, expectedTourId: tourId, nowMs \}\)/u);
 
   for (const requiredPath of [
     'notification_devices/${authUid}',
     'notification_device_tombstones/${authUid}',
     'notification_consents/${authUid}',
-    'app_sessions/${authUid}',
-    'tours/${tourId}/participants/${authUid}',
-    'tour_manifests/${tourId}/assigned_drivers',
   ]) {
     assert.match(authority, new RegExp(requiredPath.replace(/[${}]/g, '\\$&'), 'u'));
+  }
+  for (const requiredPath of ['app_sessions/${authUid}', 'app_session_authority/${authUid}', 'tours/${session.tourId}/participants/${authUid}', 'tour_manifests/${session.tourId}/assigned_drivers/${session.driverId}']) {
+    assert.ok(sessionAccess.includes(requiredPath), `shared current-session verifier must reread ${requiredPath}`);
   }
 });
 

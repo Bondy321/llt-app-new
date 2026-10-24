@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { assertOrdinaryRuleDenied } = require('../helpers/reviewedRuleConstraints');
 
 const rules = require(path.resolve(__dirname, '../../database.rules.json')).rules;
 
@@ -56,6 +57,16 @@ const EXPECTED_DRIVER_BRANCH_WRITERS = [
   'tours/$tourId/liveTracking/$userId/.write',
 ].sort();
 
+// These historical compatibility paths remain inventoried so a future grant
+// cannot silently reopen them. Supported clients publish scoped source sessions.
+const CLOSED_DRIVER_BRANCH_WRITERS = new Set([
+  'chats/$tourId/presence/$id/.write',
+  'chats/$tourId/typing/$id/.write',
+  'internal_chats/$tourId/presence/$id/.write',
+  'internal_chats/$tourId/typing/$id/.write',
+  'tours/$tourId/driverLocation/.write',
+]);
+
 const getRuleAtPath = (rulePath) => rulePath
   .split('/')
   .reduce((node, segment) => node?.[segment], rules);
@@ -68,8 +79,19 @@ const collectReviewedDriverBranchWriters = () => EXPECTED_DRIVER_BRANCH_WRITERS.
 test('explicit inventory resolves every reviewed driver-branch write authority', () => {
   const found = collectReviewedDriverBranchWriters();
   assert.equal(found.length, 46, 'driver branch inventory changed without an authority review');
+  assert.equal(CLOSED_DRIVER_BRANCH_WRITERS.size, 5, 'retired writer inventory needs explicit review');
   for (const { path: rulePath, expression } of found) {
     assert.equal(typeof expression, 'string', `${rulePath} is missing from the explicit driver branch inventory`);
+    if (CLOSED_DRIVER_BRANCH_WRITERS.has(rulePath)) assertOrdinaryRuleDenied(assert, expression, rulePath);
+  }
+});
+
+test('retired writer checks reject an ordinary or token-forged issuer grant', () => {
+  for (const rulePath of CLOSED_DRIVER_BRANCH_WRITERS) {
+    const expression = getRuleAtPath(rulePath);
+    assert.throws(() => assertOrdinaryRuleDenied(assert, `${expression} || auth != null`, rulePath));
+    assert.throws(() => assertOrdinaryRuleDenied(assert,
+      `${expression} || (auth != null && auth.token.lltSessionIssuer === true)`, rulePath));
   }
 });
 
@@ -92,6 +114,7 @@ test('every driver branch directly binds complete active-session authority', () 
   ];
 
   for (const { path: rulePath, expression } of collectReviewedDriverBranchWriters()) {
+    if (CLOSED_DRIVER_BRANCH_WRITERS.has(rulePath)) continue;
     for (const fragment of requiredFragments) {
       assert.ok(expression.includes(fragment), `${rulePath} omits required driver authority: ${fragment}`);
     }
@@ -120,6 +143,7 @@ test('every driver session write requires strict policy authority and no active 
   ];
 
   for (const { path: rulePath, expression } of found) {
+    if (CLOSED_DRIVER_BRANCH_WRITERS.has(rulePath)) continue;
     for (const fragment of requiredFragments) {
       assert.ok(expression.includes(fragment), `${rulePath} omits strict driver policy authority: ${fragment}`);
     }
@@ -135,14 +159,13 @@ test('every driver session write requires strict policy authority and no active 
   }
 });
 
-test('legacy projection writes are gated only by explicit rollout while raw cleanup queries stay indexed', () => {
-  assert.equal(rules.tours['.write'], false);
-  assert.equal(typeof rules.tours.$tourId['.write'], 'string');
-  assert.ok(rules.tours.$tourId['.write'].includes("newData.child('driverLocation').val() === data.child('driverLocation').val()"));
-  assert.equal(rules.chats['.write'], false);
-  assert.equal(rules.internal_chats['.write'], false);
-  assert.equal(rules.driver_location_projection_state['.write'], false);
-  assert.equal(rules.chat_status_projection_state['.write'], false);
+test('legacy projection writes are closed while raw cleanup queries stay indexed', () => {
+  assertOrdinaryRuleDenied(assert, rules.tours['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.tours.$tourId['.write'], 'tour parent write');
+  assertOrdinaryRuleDenied(assert, rules.chats['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.internal_chats['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.driver_location_projection_state['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.chat_status_projection_state['.write'], 'server-owned write');
 
   for (const projectionRule of [
     rules.tours.$tourId.driverLocation,
@@ -153,17 +176,16 @@ test('legacy projection writes are gated only by explicit rollout while raw clea
   ]) {
     assert.equal(typeof projectionRule['.write'], 'string');
     assert.ok(!projectionRule['.write'].includes("!data.child('projectionRevision').exists()"));
-    assert.ok(projectionRule['.write'].includes("!root.child('live_state_rollout/v1').exists()"));
-    assert.ok(projectionRule['.write'].includes("live_state_rollout/v1/phase').val() === 'compatibility'"));
+    assertOrdinaryRuleDenied(assert, projectionRule['.write'], 'retired projection write');
     assert.ok(projectionRule['.validate'].includes("!newData.child('projectionRevision').exists()"));
   }
 
   assert.deepEqual(rules.driver_location_sessions['.indexOn'], ['cleanupAtMs', 'tourId', 'appSessionId']);
   assert.equal(rules.driver_tracking_sessions['.read'], false);
-  assert.equal(rules.driver_tracking_sessions['.write'], false);
+  assertOrdinaryRuleDenied(assert, rules.driver_tracking_sessions['.write'], 'server-owned write');
   assert.deepEqual(rules.driver_tracking_sessions['.indexOn'], ['expiresAtMs', 'appSessionId']);
-  assert.equal(rules.driver_location_pickups['.write'], false);
-  assert.equal(rules.driver_location_pickups.$tourId['.write'], false);
+  assertOrdinaryRuleDenied(assert, rules.driver_location_pickups['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.driver_location_pickups.$tourId['.write'], 'server-owned write');
   assert.deepEqual(rules.driver_location_pickups['.indexOn'], ['expiresAtMs']);
   assert.ok(rules.driver_location_pickups.$tourId['.validate'].includes("newData.child('assignmentRevision').isNumber()"));
   assert.ok(rules.driver_location_pickups.$tourId['.validate'].includes("!newData.child('authUid').exists()"));
@@ -187,25 +209,25 @@ test('driver login and assignment coordination roots are explicit server-only co
   ];
   for (const rootName of unindexedPrivateRoots) {
     assert.equal(rules[rootName]['.read'], false, `${rootName} must remain client-private`);
-    assert.equal(rules[rootName]['.write'], false, `${rootName} must remain server-owned`);
+    assertOrdinaryRuleDenied(assert, rules[rootName]['.write'], `${rootName} must remain server-owned`);
     assert.equal(rules[rootName]['.indexOn'], undefined, `${rootName} has no scheduled child query`);
   }
 
   for (const rootName of ['driver_assignment_transitions', 'driver_assignment_retention']) {
     assert.equal(rules[rootName]['.read'], false, `${rootName} must remain client-private`);
-    assert.equal(rules[rootName]['.write'], false, `${rootName} must remain server-owned`);
+    assertOrdinaryRuleDenied(assert, rules[rootName]['.write'], `${rootName} must remain server-owned`);
     assert.deepEqual(rules[rootName].v1['.indexOn'], ['expiresAtMs']);
   }
 
   assert.equal(rules.app_session_role_claim_jobs['.read'], false);
-  assert.equal(rules.app_session_role_claim_jobs['.write'], false);
+  assertOrdinaryRuleDenied(assert, rules.app_session_role_claim_jobs['.write'], 'server-owned write');
   assert.deepEqual(rules.app_session_role_claim_jobs.v1['.indexOn'], ['createdAtMs', 'expiresAtMs']);
 });
 
 test('canonical assignment fields have no granting client ancestor or leaf', () => {
-  assert.equal(rules.drivers['.write'], false);
-  assert.equal(rules.tour_manifests['.write'], false);
-  assert.equal(rules.users['.write'], false);
+  assertOrdinaryRuleDenied(assert, rules.drivers['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.tour_manifests['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.users['.write'], 'server-owned write');
 
   const driverParentWrite = rules.drivers.$driverId['.write'];
   assert.equal(typeof driverParentWrite, 'string');
@@ -220,13 +242,7 @@ test('canonical assignment fields have no granting client ancestor or leaf', () 
   assert.equal(typeof userParentWrite, 'string');
   assert.ok(userParentWrite.includes("newData.child('driverAssignedTourId').val() === data.child('driverAssignedTourId').val()"));
 
-  const tourParentWrite = rules.tours.$tourId['.write'];
-  for (const field of ['driverId', 'driverName', 'driverPhone', 'driverAssignmentRevision']) {
-    assert.ok(
-      tourParentWrite.includes(`newData.child('${field}').val() === data.child('${field}').val()`),
-      `safe tour metadata writes must preserve ${field}`,
-    );
-  }
+  assertOrdinaryRuleDenied(assert, rules.tours.$tourId['.write'], 'canonical tour parent');
 
   for (const rule of [
     rules.tours.$tourId.driverName,
@@ -236,7 +252,7 @@ test('canonical assignment fields have no granting client ancestor or leaf', () 
     rules.tour_manifests.$tourId.assigned_driver_codes.$driverId,
     rules.users.$userId.driverAssignedTourId,
   ]) {
-    assert.equal(rule['.write'], false);
+    assertOrdinaryRuleDenied(assert, rule['.write'], 'canonical assignment leaf');
   }
 });
 
@@ -263,8 +279,8 @@ test('normal web clients contain no direct canonical assignment update map', () 
 
 test('live-state rollout and terminal warnings are explicit server-owned contracts', () => {
   assert.equal(rules.live_state_rollout['.read'], false);
-  assert.equal(rules.live_state_rollout['.write'], false);
-  assert.equal(rules.operations_terminal_warnings['.write'], false);
+  assertOrdinaryRuleDenied(assert, rules.live_state_rollout['.write'], 'server-owned write');
+  assertOrdinaryRuleDenied(assert, rules.operations_terminal_warnings['.write'], 'server-owned write');
   assert.equal(typeof rules.operations_terminal_warnings['.read'], 'string');
   assert.deepEqual(
     rules.operations_terminal_warnings.v1['.indexOn'],
@@ -278,7 +294,6 @@ test('live-state rollout and terminal warnings are explicit server-owned contrac
     rules.internal_chats.$tourId.typing.$id,
     rules.internal_chats.$tourId.presence.$id,
   ]) {
-    assert.ok(projectionRule['.write'].includes("!root.child('live_state_rollout/v1').exists()"));
-    assert.ok(projectionRule['.write'].includes("live_state_rollout/v1/phase').val() === 'compatibility'"));
+    assertOrdinaryRuleDenied(assert, projectionRule['.write'], 'retired projection write');
   }
 });

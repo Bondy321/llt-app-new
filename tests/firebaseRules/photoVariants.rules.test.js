@@ -39,7 +39,7 @@ const rules = fs
 
 let testEnv;
 let dbUrl;
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 test.before(async () => {
   const emulator = parseHost();

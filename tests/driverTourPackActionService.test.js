@@ -100,7 +100,7 @@ test('writes service and hotel progress through rule-approved leaf paths', async
   assert.equal(updates[0]['serviceCompletion/service_1/updatedAtMs'], 100);
   assert.equal(updates[0]['serviceCompletion/service_1'], undefined);
   assert.equal(updates[1]['hotelCompletion/hotel_1/state'], 'COMPLETED');
-  assert.equal(updates[1]['hotelCompletion/hotel_1/updatedAtMs'], 100);
+  assert.equal(updates[1]['hotelCompletion/hotel_1/updatedAtMs'], 101);
   assert.equal(updates[1]['hotelCompletion/hotel_1'], undefined);
 });
 

@@ -31,7 +31,8 @@ const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, [ADMIN_UID, DELEGATED_ADMIN_UID].includes(uid)
+  ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 test.before(async () => {
   const emulator = parseHost();
@@ -107,8 +108,8 @@ test('allows claimed driver self reads but denies unclaimed exact reads and driv
 test('allows admin driver record creation', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref('drivers/D-ADMIN').set({
     name: 'Admin Created',
-    authUid: ADMIN_UID,
   }));
+  await assertFails(testEnv.authenticatedContext(ADMIN_UID).database(dbUrl).ref('drivers/D-NO-MFA').set({ name: 'Denied' }));
 });
 
 test('allows operations admins to list portal collections but denies every canonical assignment leaf', async () => {
@@ -295,7 +296,7 @@ test('off permits a second current handset while on requires the claimed handset
     await db.ref(`app_sessions/${DRIVER_AUTH_UID}/driverLoginPolicyGeneration`).remove();
   });
 
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}`).get());
   await assertFails(dbFor(DRIVER_AUTH_UID).ref('driver_login_policy/v1').get());
   await assertFails(dbFor(DRIVER_AUTH_UID).ref('driver_login_policy/v1').set({
     schemaVersion: 1,
@@ -341,7 +342,7 @@ test('claimed drivers cannot manufacture manifest assignment authority', async (
   );
 });
 
-test('allows a claimed driver to unlink only their own auth uid for account deletion', async () => {
+test('claimed drivers cannot bypass server-only deletion by unlinking their own auth uid', async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref().update({
       'driver_login_policy/v1': {
@@ -354,5 +355,8 @@ test('allows a claimed driver to unlink only their own auth uid for account dele
       [`app_sessions/${DRIVER_AUTH_UID}/driverLoginPolicyGeneration`]: 0,
     });
   });
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}/authUid`).remove());
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(`drivers/${CLAIMED_DRIVER_ID}/authUid`).remove());
+  await testEnv.withSecurityRulesDisabled(async context => {
+    assert.equal((await context.database(dbUrl).ref(`drivers/${CLAIMED_DRIVER_ID}/authUid`).get()).val(), DRIVER_AUTH_UID);
+  });
 });

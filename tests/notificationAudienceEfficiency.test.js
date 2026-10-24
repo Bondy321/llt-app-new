@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { seedNotificationPassengerAuthority } = require('./helpers/seedNotificationPassengerAuthority');
 
 process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: 'demo-llt-notification-efficiency' });
 
@@ -62,6 +63,18 @@ const compareValues = (left, right) => {
 };
 
 const createReadDb = (data) => {
+  seedNotificationPassengerAuthority(data);
+  data.app_session_authority ||= {};
+  for (const [uid, session] of Object.entries(data.app_sessions || {})) {
+    data.app_session_authority[uid] ||= { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: session.sessionId };
+    if (session.principalType === 'driver') {
+      data.driver_staff_policy ||= {};
+      data.driver_staff_policy[session.driverId] ||= { schemaVersion: 1, generation: 'a'.repeat(48) };
+      data.driver_device_authorizations ||= {};
+      data.driver_device_authorizations[uid] ||= { schemaVersion: 1, state: 'active', driverId: session.driverId,
+        sessionId: session.sessionId, generation: 'a'.repeat(48) };
+    }
+  }
   const reads = [];
   const writes = [];
   const ref = (pathName = '') => {
@@ -117,6 +130,7 @@ const createReadDb = (data) => {
           writes.push({ path: updatePath, value });
         });
       },
+      set: async (value) => writePath(data, pathName, value),
       transaction: async (updater) => {
         const current = readPath(data, pathName);
         const next = updater(current ?? null);
@@ -310,6 +324,7 @@ test('page preparation reports every bounded work counter from query to provider
     navigation: { screen: 'Tour' },
     deliveryPolicy: {},
   };
+  db.data.notification_jobs_v2 = { [job.jobId]: job };
   const metrics = {};
   const audience = await enumerateNotificationAudiencePage({ db, job, metrics });
   const prepared = await prepareDeliveryPage(
@@ -317,13 +332,29 @@ test('page preparation reports every bounded work counter from query to provider
   );
 
   assert.equal(prepared.prepared.length, 1);
-  assert.equal(metrics.rtdbDirectReads, 7);
+  assert.equal(metrics.rtdbDirectReads, 11);
   assert.equal(metrics.rtdbQueries, 1);
   assert.equal(metrics.transactionAttempts, 4);
   assert.equal(metrics.candidateEvaluations, 1);
   assert.equal(metrics.authorityEvaluations, 1);
   assert.equal(metrics.attemptClaims, 1);
   assert.equal(metrics.providerMessagesPrepared, 1);
+
+  // A retained device, participant and canonical SID cannot outlive source or
+  // private booking authority. Recheck each state immediately before delivery.
+  const candidate = audience.candidates[0];
+  const booking = db.data.bookings['SYNTHETIC-target'];
+  for (const patch of [{ tourId: 'transferred-tour' }, { loginEligible: false },
+    { sourceRoster: { schemaVersion: 1, state: 'not_in_report', revision: 'a'.repeat(64) } }]) {
+    const original = structuredClone(booking);
+    Object.assign(booking, patch);
+    assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
+    for (const key of Object.keys(booking)) delete booking[key];
+    Object.assign(booking, original);
+    assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, true);
+  }
+  db.data.passenger_identity_security['SYNTHETIC-target'].authorizedAuthUids.target = false;
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
 });
 
 test('driver delivery rereads current policy generation and exact assignment authority', async () => {
@@ -341,7 +372,7 @@ test('driver delivery rereads current policy generation and exact assignment aut
   const db = createReadDb({
     notification_devices: { [authUid]: device },
     users: { [authUid]: {
-      principalType: 'driver', driverId, driverPrincipalId: `driver:${driverId}`,
+      principalType: 'driver', driverId, driverPrincipalId: `driver:${driverId}`, driverAssignedTourId: 'TOUR_1',
     } },
     app_sessions: { [authUid]: {
       schemaVersion: 1,
@@ -382,11 +413,28 @@ test('driver delivery rereads current policy generation and exact assignment aut
   );
 
   db.data.driver_login_policy.v1.generation = 3;
+  db.data.drivers[driverId].authUidStaffGeneration = 'a'.repeat(48);
   db.data.tour_manifests.TOUR_1.assigned_drivers[driverId] = false;
   assert.deepEqual(
     await evaluateAudienceCandidate({ db, job, candidate, nowMs }),
     { eligible: false, reason: 'wrong_tour' },
   );
+  db.data.tour_manifests.TOUR_1.assigned_drivers[driverId] = true;
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, true);
+  db.data.driver_assignment_active = { v1: { [driverId]: false } };
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
+  delete db.data.driver_assignment_active.v1[driverId];
+  db.data.driver_login_policy.v1.transitionPhase = 'preparing';
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
+  db.data.driver_login_policy.v1.transitionPhase = 'stable';
+  db.data.drivers[driverId].authUidStaffGeneration = 'b'.repeat(48);
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
+  db.data.drivers[driverId].authUidStaffGeneration = 'a'.repeat(48);
+  db.data.driver_staff_policy[driverId].generation = 'b'.repeat(48);
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
+  db.data.driver_staff_policy[driverId].generation = 'a'.repeat(48);
+  db.data.drivers[driverId].currentTourId = 'OTHER_TOUR';
+  assert.equal((await evaluateAudienceCandidate({ db, job, candidate, nowMs })).eligible, false);
 });
 
 test('missing and malformed rollout records fail closed to legacy scan', () => {
@@ -456,7 +504,8 @@ test('indexed marketing candidates are rejected when revision or tombstone autho
   assert.deepEqual(stale, { eligible: false, reason: 'stale_marketing_index' });
 
   const current = await evaluateAudienceCandidate({
-    db: staleDb,
+    db: createReadDb({ notification_devices: { target: baseDevice },
+      notification_consents: { target: { registrationRevision: 7, marketingPreferences: { day_trips: true } } } }),
     job: baseJob,
     candidate: {
       authUid: 'target', source: 'indexed_marketing',

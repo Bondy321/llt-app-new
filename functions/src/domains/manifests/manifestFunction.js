@@ -8,7 +8,7 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { checkRateLimit, getRequestClientKey, hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
+const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { buildTourManifestPayload } = require('./manifestDomain');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
@@ -36,12 +36,10 @@ const getTourManifest = onRequestWithResult(
       return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     }
 
-    const clientKey = getRequestClientKey(req);
-    if (!checkRateLimit(`get_tour_manifest_${requestAuth.uid}_${tourId}_${clientKey}`, 30, 60000)) {
+    if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'manifest', maxRequests: 30 }))) {
       log.warn('Tour manifest rate limit exceeded', {
         authUid: requestAuth.uid,
         tourId,
-        networkDimension: hashRateLimitDimension(clientKey),
       });
       return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
     }
@@ -66,6 +64,10 @@ const getTourManifest = onRequestWithResult(
         tourId,
         requestedTourCode: requestedTour,
       });
+
+      const currentAccess = await verifyActiveAppSession({ db: admin.database(), authUid: requestAuth.uid,
+        expectedTourId: tourId, expectedRole: 'driver', expectedSessionId: access.session.sessionId });
+      if (!currentAccess.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
 
       log.info('Tour manifest response built', {
         authUid: requestAuth.uid,

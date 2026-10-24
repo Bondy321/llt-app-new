@@ -287,6 +287,9 @@ const normalizePhotoRecordForClient = (id, value, extras = {}) => {
   return photo;
 };
 
+const isVisiblePhotoRecord = photo => Boolean(photo && !photo._serverDeletion
+  && (!photo._upload || photo._upload.status === 'complete'));
+
 const mapSnapshotToPhotos = (snapshot, extras = {}) => {
   const data = snapshot.val() || {};
   return Object.entries(data).map(([id, value]) => normalizePhotoRecordForClient(id, value, extras));
@@ -358,6 +361,7 @@ module.exports = {
   limitToLast,
   logPhotoDbEvent,
   mapSnapshotToPhotos,
+  isVisiblePhotoRecord,
   normalizeCursor,
   normalizeOptionalNumber,
   normalizeOptionalString,
