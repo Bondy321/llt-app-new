@@ -2,6 +2,7 @@
 
 // @ts-check
 
+const { saveVariantOnce, buildPhotoVariantPaths } = require('./mediaVariantStorage');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { createPhotoVariantBuffers } = require('../../infrastructure/storage/mediaProcessor');
 const {
@@ -39,8 +40,9 @@ const cleanupCreatedPhotoVariants = async (createdVariants) => {
   return { cleaned: failures.length === 0, failureCount: failures.length };
 };
 
-/** @param {string} visibility @param {string} sourceRole */
-const buildVariantObjectMetadata = (visibility, sourceRole) => ({
+/** @param {string} visibility @param {string} sourceRole @param {string} sourcePath @param {string} sourceGeneration */
+const buildVariantObjectMetadata = (visibility, sourceRole, sourcePath, sourceGeneration) => ({
+  sourcePath, sourceGeneration,
   visibility: visibility === 'private' ? 'private' : 'group',
   sourceRole,
 });
@@ -78,25 +80,13 @@ const buildPhotoCollectionPath = ({ visibility, tourId, ownerKey }) => {
   return `group_tour_photos/${tourId}`;
 };
 
-/** @type {(...args: any[]) => any} */
-const buildPhotoVariantPaths = ({ visibility, tourId, ownerKey, filename }) => {
-  const extensionlessName = filename.replace(/\.[^/.]+$/, "");
-  const viewerPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/viewers/${extensionlessName}_viewer.jpg`
-    : `group_tour_photos/${tourId}/viewers/${extensionlessName}_viewer.jpg`;
-  const thumbnailPath = visibility === "private"
-    ? `private_tour_photos/${tourId}/${ownerKey}/thumbnails/${extensionlessName}_thumb.jpg`
-    : `group_tour_photos/${tourId}/thumbnails/${extensionlessName}_thumb.jpg`;
-
-  return { viewerPath, thumbnailPath };
-};
-
 /** @type {(...args: any[]) => Promise<any>} */
 const hardenPrivateSourceObjectMetadata = async (sourceFile, suppliedObjectMetadata = null) => {
   const objectMetadata = suppliedObjectMetadata || (await sourceFile.getMetadata())[0];
   const current = objectMetadata?.metadata || {};
   await sourceFile.setMetadata({
     metadata: {
+      ...(typeof current.uploadOperationId === 'string' ? { uploadOperationId: current.uploadOperationId } : {}),
       ...(typeof current.authUid === 'string' && current.authUid ? { authUid: current.authUid } : {}),
       visibility: 'private',
       sourceRole: 'source',
@@ -107,8 +97,12 @@ const hardenPrivateSourceObjectMetadata = async (sourceFile, suppliedObjectMetad
 
 /** @type {(...args: any[]) => Promise<any>} */
 const hardenGroupSourceObjectMetadata = async (sourceFile) => {
+  const [objectMetadata] = await sourceFile.getMetadata();
+  const current = objectMetadata?.metadata || {};
   await sourceFile.setMetadata({
     metadata: {
+      ...(typeof current.uploadOperationId === 'string' ? { uploadOperationId: current.uploadOperationId } : {}),
+      ...(typeof current.authUid === 'string' ? { authUid: current.authUid } : {}),
       visibility: 'group',
       sourceRole: 'source',
       firebaseStorageDownloadTokens: null,
@@ -177,6 +171,9 @@ const generatePhotoVariantsForRecord = async (options) => {
       || currentRecord.storagePath !== objectPath) {
       return { status: 'skipped', reason: 'record-changed', photoId };
     }
+    if (currentRecord._upload && currentRecord._upload.status !== 'complete') {
+      return { status: 'retry', reason: 'media-publication-pending', photoId };
+    }
     baselineFingerprint = mediaRecordFingerprint(currentRecord);
     // Publish deterministic target paths before the first external write. If
     // the process dies after a Storage save, deletion can still discover and
@@ -199,6 +196,8 @@ const generatePhotoVariantsForRecord = async (options) => {
     const sourceFile = resolvedBucket.file(objectPath);
     const [sourceBuffer] = await sourceFile.download();
     const [sourceObjectMetadata] = await sourceFile.getMetadata();
+    const sourceGeneration = String(sourceObjectMetadata?.generation || '');
+    if (!sourceGeneration) throw Object.assign(new Error('Source generation unavailable'), { code: 'MEDIA_GENERATION_UNAVAILABLE' });
     if (visibility === 'private') await hardenPrivateSourceObjectMetadata(sourceFile, sourceObjectMetadata);
     else await hardenGroupSourceObjectMetadata(sourceFile);
     const { viewerBuffer, thumbnailBuffer } = await createPhotoVariantBuffers(sourceBuffer);
@@ -207,19 +206,11 @@ const generatePhotoVariantsForRecord = async (options) => {
       [thumbnailPath, thumbnailBuffer, 'thumbnail'],
     ]) {
       const variantFile = resolvedBucket.file(path);
-      await variantFile.save(buffer, {
-        metadata: {
-          contentType: "image/jpeg",
-          cacheControl: PHOTO_CACHE_CONTROL_HEADER,
-          metadata: buildVariantObjectMetadata(visibility, sourceRole),
-        },
-      });
-      const createdVariant = { file: variantFile, generation: null };
-      createdVariants.push(createdVariant);
-      const [variantMetadata] = typeof variantFile.getMetadata === 'function'
-        ? await variantFile.getMetadata()
-        : [null];
-      createdVariant.generation = variantMetadata?.generation || null;
+      const saved = await saveVariantOnce({ file: variantFile, buffer, metadata: {
+        contentType: 'image/jpeg', cacheControl: PHOTO_CACHE_CONTROL_HEADER,
+        metadata: buildVariantObjectMetadata(visibility, sourceRole, objectPath, sourceGeneration),
+      } });
+      if (saved.created) createdVariants.push({ file: variantFile, generation: saved.generation });
     }
 
     const update = await recordRef.transaction((current) => {

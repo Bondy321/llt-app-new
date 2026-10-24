@@ -258,7 +258,7 @@ const isCurrentDriverSession = (session, policy, driverId, nowMs) => {
     || !Number.isSafeInteger(session.sessionRevision) || session.sessionRevision < 1) return false;
   const sessionGeneration = Number.isSafeInteger(session.driverLoginPolicyGeneration)
     ? session.driverLoginPolicyGeneration
-    : 0;
+    : -1;
   return sessionGeneration === policy.generation;
 };
 

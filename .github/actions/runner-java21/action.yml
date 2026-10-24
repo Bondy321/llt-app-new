@@ -1,0 +1,14 @@
+name: Select runner Java 21 using shell
+description: Select and verify the Ubuntu 24.04 image Java 21 without JavaScript actions
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        : "${JAVA_HOME_21_X64:?Ubuntu runner Java 21 is required}"
+        [[ -x "$JAVA_HOME_21_X64/bin/java" ]]
+        "$JAVA_HOME_21_X64/bin/java" -XshowSettings:properties -version 2>&1 | grep -Eq '^ *java.specification.version = 21$'
+        printf 'JAVA_HOME=%s\n' "$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+        printf '%s/bin\n' "$JAVA_HOME_21_X64" >> "$GITHUB_PATH"
+        "$JAVA_HOME_21_X64/bin/java" -version

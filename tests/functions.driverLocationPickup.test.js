@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+const { withApprovedStaffSessions } = require('./helpers/approvedStaffFixtures');
 const assert = require('node:assert/strict');
 
 const {
@@ -18,7 +19,7 @@ const {
 const snapshot = (value) => ({ exists: () => value != null, val: () => structuredClone(value ?? null) });
 
 const createDb = (initial = {}) => {
-  const state = structuredClone(initial);
+  const state = withApprovedStaffSessions(initial);
   const parts = (path) => String(path || '').split('/').filter(Boolean);
   const read = (path) => parts(path).reduce((node, key) => node?.[key], state);
   const write = (path, value) => {
@@ -78,6 +79,7 @@ test('trusted Function publishes and withdraws through the real app-session lock
     authUid,
     driverId: 'D-ONE',
     tourId: 'TOUR_1',
+    driverLoginPolicyGeneration: 0,
     sessionId,
     nowMs,
   });
@@ -109,7 +111,7 @@ test('trusted Function publishes and withdraws through the real app-session lock
     operation: 'publish',
     tourId: 'TOUR_1',
     expectedSessionId: sessionId,
-    clientVersion: '1.0.5',
+    clientVersion: '1.1.0',
     location: { latitude: 56.1, longitude: -4.6, accuracy: 9 },
     address: 'Pier Road',
   });
@@ -124,7 +126,7 @@ test('trusted Function publishes and withdraws through the real app-session lock
     operation: 'withdraw',
     tourId: 'TOUR_1',
     expectedSessionId: sessionId,
-    clientVersion: '1.0.5',
+    clientVersion: '1.1.0',
   });
   const withdrawn = await performPickupMutation({ db, input: withdrawInput, requestAuth: { uid: authUid } });
   assert.deepEqual(withdrawn, {
@@ -140,7 +142,7 @@ test('tour deletion assignment lock prevents an in-flight pickup from resurrecti
   const authUid = 'uid-driver-delete-race';
   const sessionId = `sess_v1_${'b'.repeat(32)}`;
   const db = createDb({
-    app_sessions: { [authUid]: buildDriverSessionRecord({ authUid, driverId: 'D-ONE', tourId: 'TOUR_1', sessionId, nowMs }) },
+    app_sessions: { [authUid]: buildDriverSessionRecord({ authUid, driverId: 'D-ONE', tourId: 'TOUR_1', sessionId, nowMs, driverLoginPolicyGeneration: 0 }) },
     users: { [authUid]: { principalType: 'driver', driverId: 'D-ONE', driverPrincipalId: 'driver:D-ONE', driverAssignedTourId: 'TOUR_1' } },
     drivers: { 'D-ONE': { currentTourId: 'TOUR_1' } },
     tours: { TOUR_1: { driverId: 'D-ONE', driverAssignmentRevision: 7, driverLocation: { isSharing: true } } },
@@ -158,7 +160,7 @@ test('tour deletion assignment lock prevents an in-flight pickup from resurrecti
     requestAuth: { uid: authUid },
     input: parseInput({
       operation: 'publish', tourId: 'TOUR_1', expectedSessionId: sessionId,
-      clientVersion: '1.0.5', location: { latitude: 56.1, longitude: -4.6, accuracy: 8 },
+      clientVersion: '1.1.0', location: { latitude: 56.1, longitude: -4.6, accuracy: 8 },
     }),
   });
   delete db.state.tours.TOUR_1;

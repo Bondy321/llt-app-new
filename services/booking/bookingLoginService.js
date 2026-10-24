@@ -9,7 +9,6 @@ const {
   realtimeDb,
   recordLoginDiagnostic,
   resolveLoginDiagnosticsContext,
-  resolveTourId,
   validateAppSession,
 } = require('./bookingServiceContext');
 const { verifyDriverLoginIdentity, verifyPassengerLoginIdentity } = require('./bookingVerifierService');
@@ -18,61 +17,6 @@ const {
   resolveVerifierTourId,
   validateBookingRef,
 } = require('./bookingDomain');
-
-const resolveDriverLoginFromDatabase = async (driverId) => {
-  try {
-    const driverSnapshot = await realtimeDb.ref(`drivers/${driverId}`).once('value');
-
-    if (!driverSnapshot.exists()) {
-      return null;
-    }
-
-    const driverData = driverSnapshot.val();
-    const assignedTourId = resolveTourId(driverData.currentTourId);
-    const assignedTourCode = driverData.currentTourCode || null;
-
-    let resolvedTour = null;
-
-    if (assignedTourId) {
-      const driverTourSnapshot = await realtimeDb.ref(`tours/${assignedTourId}`).once('value');
-      if (driverTourSnapshot.exists()) {
-        const driverTourData = driverTourSnapshot.val() || {};
-        resolvedTour = {
-          id: assignedTourId,
-          ...driverTourData,
-        };
-      }
-    }
-
-    logBookingEvent('info', 'Driver login reference validated via direct database fallback', {
-      driverId: maskIdentifier(driverId),
-      assignedTourId,
-      hasResolvedTour: Boolean(resolvedTour),
-      assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
-    });
-
-    return {
-      valid: true,
-      type: 'driver',
-      driver: {
-        id: driverId,
-        name: driverData.name,
-        assignedTourId,
-        assignedTourCode,
-        hasAssignedTour: Boolean(assignedTourId),
-      },
-      tour: resolvedTour,
-      assignmentStatus: assignedTourId ? (resolvedTour ? 'ASSIGNED' : 'ASSIGNED_TOUR_NOT_FOUND') : 'UNASSIGNED',
-    };
-  } catch (error) {
-    logBookingEvent('warn', 'Driver direct database fallback unavailable', {
-      driverId: maskIdentifier(driverId),
-      error: error?.message || String(error),
-      code: error?.code || null,
-    });
-    return null;
-  }
-};
 
 // --- EXISTING: Validate Reference ---
 const validateBookingReference = async (reference, email, options = {}) => {
@@ -99,7 +43,7 @@ const validateBookingReference = async (reference, email, options = {}) => {
     const isDriverReference = upperRef.startsWith('D-');
 
     if (isDriverReference) {
-      const driverVerification = await verifyDriverLoginIdentity({ driverId: upperRef });
+      const driverVerification = await verifyDriverLoginIdentity({ driverId: upperRef, enrolmentSecret: options.enrolmentSecret });
       if (driverVerification) {
         if (!driverVerification.valid) {
           logBookingEvent('warn', 'Driver verifier rejected code', {
@@ -323,4 +267,4 @@ const validateBookingReference = async (reference, email, options = {}) => {
   }
 };
 
-module.exports = { resolveDriverLoginFromDatabase, validateBookingReference };
+module.exports = { validateBookingReference };

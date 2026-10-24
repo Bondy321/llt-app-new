@@ -9,7 +9,7 @@ const CRITICAL_WARNING_STATUSES = new Set([
 /** @param {any} db @param {any} job @param {number} nowMs */
 const publishCriticalFanoutWarning = async (db, job, nowMs) => {
   if (job.priorityClass !== 'critical' || !CRITICAL_WARNING_STATUSES.has(job.status)) return;
-  await db.ref(`notification_delivery_warnings/${job.jobId}`).update({
+  await db.ref(`notification_delivery_warnings_v2/${job.jobId}`).update({
     jobId: job.jobId,
     tourId: job.tourId || null,
     eventId: job.eventId || null,

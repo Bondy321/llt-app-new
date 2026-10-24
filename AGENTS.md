@@ -2,16 +2,16 @@
 
 Welcome, Agent. This file is the operational source of truth for contributors working in this repo. Keep it practical: update it whenever architecture, contracts, commands, or release assumptions materially change.
 
-For the current launch work, the user authorizes committing and pushing completed fixes directly to `main`. Keep the implementation and required verification standards; use a short implement, verify, push loop without adding staged rollout or PR approval steps. Record any required service deployment and live checks truthfully; a Git push alone does not make backend changes live.
+For the first public launch, complete implementation and verification, then deliver through the actual protected-branch PR/CI rules in both repositories. Do not force-push or bypass protections. Ordinary pushes must never publish an OTA. Native/TestFlight/customer publication requires an explicit manual action for the reviewed exact commit with successful checks and matching backend/rules/provider prerequisites. This task authorizes repository delivery and isolated verification, not production deployment, shared resets, customer messages or app/store publication.
 
-Last updated: October 23, 2026
+Last updated: October 24, 2026
 
 Architecture source of truth: start with `docs/architecture/overview.md`, then follow `module-boundaries.md` and the runtime-specific document. Account deletion is specified by `docs/data-contracts/account-deletion.md`, ADR 0009 and `docs/operations/account-deletion.md`; do not duplicate or weaken that preservation boundary. Keep `App.js` and `functions/index.js` as composition roots; preserve compatibility facades; place Firebase, HTTP, and persistence access behind adapters; update canonical contracts and generated copies together; run `npm run verify:refactor` for structural changes. The detailed rationale lives in `docs/architecture/decisions/` and should not be duplicated here.
 Source membership, cancellation and boarding identity are specified in `docs/data-contracts/source-passenger-roster.md`. Missing passenger email is expected roster-only data, not an import error. Preserve private archives, manual additions, generation fences and encoded boarding identity; never infer source membership from pickup/email reports or merge old positional history into a new roster.
 Current attested TourPax reports may transfer an unmarked legacy booking by exact reference through the normal fenced transfer journal. Revalidate old-tour existence and ownership under shared leases; preserve explicit manual/other ownership, malformed-metadata rejection, both boarding histories and fresh occurrence IDs. Missing legacy metadata alone must not block a normal transfer.
-Passenger booking credentials may be verified independently on multiple phones. Private `deviceAuthorizationVersion: 2` and `authorizedAuthUids/{uid}: true` preserve one opaque booking principal with separate device sessions. Promote an unversioned legacy UID atomically on verified login; never let its retained scalar bypass version-2 membership. Logout/revocation is device-local; account deletion preserves its existing shared-content scope and removes only the deleting phone's authority. See `docs/stable-identity-rollout-checklist.md`.
-Live location publication uses server-owned per-tour revision/epoch fencing in compatibility as well as cutover. Preserve both metadata fields during driver updates and exclude them from admin copy/edit payloads. Deploy all affected location/session/assignment callers together; a successful native build or partial Function deployment is not live tracking acceptance.
-Explicit native tracking uses authenticated HTTP for current-session reads, intent writes and GPS publication. Its tracking-specific publisher must not depend on the RTDB SDK socket, connection metadata or `onDisconnect`; preserve server authority checks, explicit Stop tombstones, sample freshness and source expiry. The foreground SDK publication service retains its separate disconnect cleanup.
+Passenger booking credentials may be verified independently on multiple phones. Private `deviceAuthorizationVersion: 2` and `authorizedAuthUids/{uid}: true` preserve one opaque booking principal with separate device sessions. Never promote scalar tester ownership into current authority. Verified login publishes only the exact current UID into the version-2 map; retained historical scalar data grants no access. Logout/revocation is device-local; account deletion preserves its existing shared-content scope and removes only the deleting phone's authority. See `docs/stable-identity-rollout-checklist.md`.
+Live location publication uses server-owned per-tour revision/epoch fencing in the sole supported cutover contract. Preserve both metadata fields during driver updates and exclude them from admin copy/edit payloads. Deploy all affected location/session/assignment callers together; a successful native build or partial Function deployment is not live tracking acceptance.
+Explicit native tracking uses authenticated RTDB REST with App Check for current-session reads, intent writes and GPS publication, plus the session retirement Function. Its tracking-specific publisher must not depend on the RTDB SDK socket, connection metadata or `onDisconnect`; preserve server authority checks, explicit Start intent, Stop tombstones, sample freshness and source expiry. New non-tracking foreground sources are denied; legacy records permit only exact-owner cleanup.
 Notification retention is specified by `docs/data-contracts/notification-delivery.md`, `docs/performance/notification-retention-scale.md`, and `docs/operations/notification-retention.md`.
 Wave 1 reliability contracts and release evidence are in `docs/operations/wave1-reliability-2026-10-17.md`. Authorised driver assignment reconciles the same installation/session/principal monotonically through the session adapter and application runner; retire old-tour replay/listeners/tracking and require a fresh explicit tracking Start. Revision-only lease fences must not restart tour work. Existing-record Admin transactions use `transactExistingRecord` and its `applied` result, not a retained-cache assumption or `committed` alone. Cleanup uses bounded canonical revision/expiry transactions plus exact-session derived ownership; routine notification registration must not advance the canonical revision. Keep login claim admission separate from strict established driver binding.
 Wave 1 sign-off corrections are in `docs/operations/wave1-signoff-corrections-2026-10-22.md`. Fresh-login identity/projection ownership and revocation-subscription ownership are explicit and separate from operational generations. Captured deletion requests supply their expected session before revision-advancing admission. Device cleanup ownership comes from server-verified current session authority independently of operational eligibility; an equal untagged snapshot is not ownership. The source sign-off and deployed/mobile acceptance are separate. Preserve the documented old/new notification-worker overlap release condition and qualified notification-accounting follow-up.
@@ -157,9 +157,9 @@ Do not rename these Realtime Database roots without a full migration:
 - `tour_notifications`
 - `notification_read_state`
 - `notification_read_cleanup_jobs` (server-private bounded continuation jobs)
-- `notification_jobs`, `notification_job_coalescing`, `notification_job_token_claims`, `notification_job_audience_claims` (server-private durable push outbox, supersession and UID/token deduplication claims)
-- `notification_delivery_attempts`, `notification_delivery_warnings` (server-private ticket/receipt state and visible operations warnings)
-- `notification_retention/v1` and `notification_retention_rollout/v1` (server-private durable retention jobs, due queue, repair/progress evidence and compatibility-first rollout authority)
+- `notification_jobs_v2`, `notification_job_coalescing_v2`, `notification_job_token_claims_v2`, `notification_job_audience_claims_v2` (server-private durable launch push outbox, supersession and UID/token deduplication claims)
+- `notification_delivery_attempts_v2`, `notification_delivery_warnings_v2` (server-private ticket/receipt state and visible operations warnings; other private delivery queues/accounting use the same `_v2` isolation)
+- `notification_retention/v2` and `notification_retention_rollout/v2` (server-private durable retention jobs, due queue, repair/progress evidence and current retention authority)
 - `notification_devices`, `notification_consents` (server-owned installation push state and explicit marketing consent; self-readable, client-write denied)
 - `notification_device_tombstones` (server-private permanent UID anti-recreation fence; account deletion creates/preserves it under the device lock)
 - `marketing_notification_details` (server-owned durable future-tour notification content)
@@ -184,7 +184,7 @@ Do not rename these Realtime Database roots without a full migration:
 - `driver_location_sessions`, `driver_location_pickups`, `driver_location_projection_state`, `live_state_rollout` (private per-session live sources, assignment-owned canonical pickup, projection fencing, and explicit rollout authority)
 - `driver_tracking_sessions` (write-only exact tracking intent and monotonic stop fence; stopped tombstones persist until immutable app-session expiry, and `stopDriverTrackingSession` provides authenticated missing-fence retirement recovery)
 - `chat_presence_sessions`, `chat_typing_sessions`, `chat_status_projection_state` (private per-session status sources and projection fencing)
-- `account_deletion_jobs`, `account_deletion_queue`, `account_deletion_active`, `account_deletion_passenger_active`, `account_deletion_locks`, `account_deletion_passenger_locks`, `account_deletion_uid_tombstones`, `account_deletion_completion_tombstones`, `account_deletion_rollout` (server-private durable deletion work, queue/leases, UID and passenger admission barriers, serialization, permanent deleted-UID/completion fencing and compatibility policy)
+- `account_deletion_jobs`, `account_deletion_queue`, `account_deletion_active`, `account_deletion_passenger_active`, `account_deletion_locks`, `account_deletion_passenger_locks`, `account_deletion_uid_tombstones`, `account_deletion_completion_tombstones`, `account_deletion_rollout` (server-private durable deletion work, queue/leases, UID and passenger admission barriers, serialization, permanent deleted-UID/completion fencing and server-only authority)
 - `media_record_locks` (server-private per-photo serialization shared by normal upload/delete endpoints and durable account deletion)
 
 Admin UID hardcoded in rules:
@@ -226,22 +226,22 @@ Passenger login:
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK`
   - `EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK`
-- Backend App Check enforcement is controlled by `REQUIRE_APP_CHECK_FOR_LOGIN`. It is explicitly
-  disabled with `false` until the production apps are registered; an omitted deployed setting still
-  fails closed so configuration loss cannot silently change the mode.
+- Public-launch backend login requires App Check; deployed missing/false configuration fails closed.
+  Native App Attest/DeviceCheck and Play Integrity provider registration must be completed by the owner
+  before publishing the new native runtime; emulator-only test bypasses are not production evidence.
 - Login abuse quotas are authoritative RTDB transactions under opaque hashed
   `login_rate_limits/v1/*` buckets, shared by every Gen2 instance. The module-local limiter is not
   an acceptable authority for either login endpoint.
-- Production/TestFlight workflows currently pin both client App Check flags and
-  `LLT_REQUIRE_PRODUCTION_APPCHECK` to `false`. Enable all client and backend flags together only
-  after a staged registration and token smoke test. Broad network quotas use only the trusted
+- Production/TestFlight workflows require both client App Check flags and
+  `LLT_REQUIRE_PRODUCTION_APPCHECK` to be true; verify genuine native provider tokens before release. Broad network quotas use only the trusted
   platform forwarding hop, never client IDs or User-Agent values. Expiry cleanup
   compare-and-deletes and drains bounded batches without deleting a concurrently reset bucket.
 
 Driver login:
 
 - Driver codes use `D-*` style identifiers.
-- `verifyDriverLogin` validates the code and writes server-owned driver identity/session fields.
+- `verifyDriverLogin` treats the driver ID as public identification and requires a separate short-lived,
+  single-use admin-issued device-enrolment secret before publishing server-owned driver authority.
   The admin-controlled `driver_login_policy/v1/enforceSingleDevice` flag defaults off. When on,
   login transactionally claims the driver record for one Firebase UID; when off, several verified
   handsets may hold independent active sessions for the same driver code.
@@ -259,9 +259,9 @@ Driver login:
 Application session authority:
 
 - Source contract: `docs/data-contracts/app-session.md`; rollout and operational response are in `docs/app-session-rollout.md` and `docs/app-session-operations-runbook.md`.
-- `app_sessions/{authUid}` is the only authority that turns persistent mobile Firebase Auth into current app access. Clients read only their own record and cannot write any session field.
-- Login Functions issue an opaque `sess_v1_{32 lowercase hex}` ID under a per-UID transactional `app_session_locks` lock. Passenger membership is server-owned schema v2 and must match the session ID, principal, tour and expiry.
-- Driver access requires an active matching session in addition to every driver mapping and assignment. Operational assignment survives logout but is never sufficient for app access.
+- `app_sessions/{authUid}` supplies the canonical session; current publication authority and exact role-specific server records are also required to turn persistent Firebase Auth into current app access. Clients read only their own record and cannot write any session field.
+- Login Functions issue an opaque `sess_v1_{32 lowercase hex}` ID under a per-UID lock and a durable `app_session_authority` epoch. Restricted Admin SDK publication is revalidated by rules at server commit, so queued obsolete writes cannot recreate authority. Passenger membership is server-owned schema v2 and must match the session ID, principal, tour and expiry.
+- Driver access requires an active matching session, committed installation epoch, exact active device approval/current staff generation, explicit policy generation and assignment. Operational assignment survives logout but is never sufficient for app access.
 - Normal logout calls `endAppSession` with Auth, App Check and the exact expected session ID. Missing state is idempotent success; mismatched state returns `SESSION_CHANGED` and cannot end a newer login.
 - Offline logout is a durable blocking pending state, not a completed logout. Startup retries it, and no tour UI may be restored while it is pending.
 - Admin revocation uses `revokeAppSession`; session expiry cleanup runs every 15 minutes. Both share the same compare-safe cleanup and distributed lock boundary.
@@ -276,10 +276,8 @@ Stable passenger identity:
 - Canonical ID: opaque server-issued `pax_v2_{32 lowercase hex characters}`.
 - Passenger principals must never contain booking reference, email, phone, name, or other customer data.
 - `verifyPassengerLogin` transactionally creates/reuses the opaque ID and persists the user profile and bindings with Admin SDK authority. Clients never derive or bind passenger identities.
-- A booking is bound to its first verified Firebase Auth UID through `passenger_identity_security/{bookingRef}/authorizedAuthUid`; a different UID receives `REAUTHORIZE_REQUIRED`. This server-only root is separate from sync-owned `booking_identities`, so imports cannot erase security state. Migration locks ambiguous multi-UID legacy bookings for operations review.
-- Account deletion compare-removes `authorizedAuthUid` through the server workflow. Clients cannot
-  read, create, replace or reassign a security record; the temporary direct-delete compatibility rule
-  must not be used by new code and is removed only by the later `server_only` rollout.
+- Each verified phone receives its exact `passenger_identity_security/{bookingRef}/authorizedAuthUids/{uid}` membership under deviceAuthorizationVersion 2. The opaque principal and real booking history are shared while sessions remain independent. Scalar tester UID ownership is not authority. This server-only root is separate from sync-owned booking identities; migration review locks remain fail-closed.
+- Account deletion compare-removes only the deleting phone's exact device membership/binding through the server workflow. Clients cannot read, create, replace, reassign or directly delete a security record. Missing rollout state resolves to server_only; compatibility is unsupported.
 - Use `toRealtimeKeySegment(stablePassengerId)` before using stable identities as path segments.
 - Encoded keys are required for:
   - `identity_bindings/{stablePassengerKey}/{authUid}`
@@ -763,7 +761,7 @@ Driver location:
 - Find My Bus derives connection truth from Firebase `.info/connected`, retries subscription failures explicitly, and haptics only on a changed publication after the initial snapshot.
 - Find My Bus does not require passenger location permission to show the driver point. Permission is requested only when the passenger chooses to show/refresh their own position.
 - Driver reassignment/unassignment clears affected assignment-owned pickups, cleans raw live state for every reconciled app session, and reprojects former tours so passengers never inherit another driver's coordinates.
-- `live_state_rollout/v1` is private explicit operations state: missing means compatibility and source writes never advance phase. This release refuses cutover with `LIVE_STATE_CUTOVER_PREREQUISITE_NOT_MET`; an untouched 1.0.4 direct RTDB writer cannot receive a literal update-required response, so compatibility remains mandatory until a future reviewed client-mapping or zero-supported-legacy-client prerequisite is proven.
+- `live_state_rollout/v1` is private explicit operations state. Only cutover is supported for the first public 1.1.0 runtime; missing state defaults to cutover. Source writes never advance phase. Retain the current tracking REST source path and tracking intent fences; deny obsolete direct projection writers.
 - Tracking fences every asynchronous result by generation and exact identity. Stop, permission loss, expiry, reassignment, logout and root teardown revoke it; navigation and backgrounding retain an explicitly started session. Fresh samples only, at most one server attempt per minute, no durable GPS queue. Cold UI launch retires interrupted intent and requires a new Start. Physical-device acceptance and OS termination limits: `docs/operations/driver-tracking-acceptance.md`.
 
 Safety UX:
@@ -903,12 +901,12 @@ Exported functions:
   - HTTPS `POST`
   - region `europe-west1`
   - validates credentials from `booking_identities/{bookingRef}`, then creates/reuses and device-binds the principal in server-only `passenger_identity_security/{bookingRef}`
-  - Firebase Auth, explicit optional App Check mode, and a fail-closed missing-configuration guard
+  - Firebase Auth, required production App Check and fail-closed deployment configuration
   - distributed atomic rate limits in separate opaque credential-, account-, and broad network-level buckets after authentication
 - `verifyDriverLogin`
   - HTTPS `POST`, authenticated, region `europe-west1`
-  - validates driver credentials and the configured App Check mode, then transactionally binds an
-    unclaimed driver record to the caller and persists server-owned identity helpers
+  - validates independent device-enrolment proof and required App Check, then preserves first-claim
+    reservation among approved installations and atomically publishes exact current staff/session authority
   - rate limited in separate credential-, account-, and broad network-level buckets
 - `cleanupExpiredLoginRateLimits`
   - scheduled hourly in `europe-west1`
@@ -1101,11 +1099,10 @@ Important RTDB invariants:
 - `assigned_driver_codes` must use the canonical object payload.
 - Chat message creates require ownership through auth UID, stable passenger identity binding, private owner identity, or verified driver principal.
 - Chat reaction, typing, presence, and read-state actor leaves are identity-scoped.
-- Private photos allow access by auth UID, raw stable identity, encoded stable key, raw private owner, encoded private owner key, or identity binding.
-- Passenger profile creation and new `identity_bindings` writes must match the caller's canonical short-lived `booking_access_grants` identity; an authenticated client cannot self-assert an arbitrary passenger identity.
+- Private photos are server mediated. Functions require the current supported session and exact server-owned opaque passenger owner; direct Storage reads/writes are denied. Retained historical ownership data is not a substitute for current access authority.
+- Passenger authority/profile identity and `identity_bindings` are published by the verified-login server operation; an authenticated client cannot self-assert or bind a passenger identity.
 - `identity_bindings` and `identity_bindings_meta` are server/admin-owned; passenger clients cannot
-  create or rotate bindings. New account-deletion code uses the server workflow; compatibility rules
-  temporarily retain the legacy exact self-delete until the separately approved `server_only` cutover.
+  create, rotate or delete bindings. Account deletion uses only the durable server-owned server_only workflow.
 - `broadcasts` writes are admin-only and require numeric `createdAtMs`.
 - `category_broadcasts` writes are admin-only, require numeric `createdAtMs`, and target canonical future-tour preference keys under `users/{uid}/preferences/marketing`.
 - `users` validates push token metadata, identity metadata, driver helper fields, and notification preferences.
@@ -1199,7 +1196,7 @@ Current `test:emulators` runs the complete Realtime Database and Storage rules m
 firebase emulators:exec --project demo-llt-rules --only database "node --test tests/firebaseRules/photoVariants.rules.test.js"
 ```
 
-All client Storage reads and writes under `group_tour_photos/**` and `private_tour_photos/**` are denied. Authenticated Functions verify the current app session for upload, short-lived URL resolution and deletion; App Check is explicitly disabled until provider registration is complete. RTDB metadata stores paths rather than durable download URLs.
+All client Storage reads and writes under `group_tour_photos/**` and `private_tour_photos/**` are denied. Authenticated Functions verify the current app session for upload, short-lived URL resolution and deletion; Production App Check is required, and owner provider registration is a release prerequisite. RTDB metadata stores paths rather than durable download URLs.
 
 High-value contract tests to know:
 
@@ -1240,7 +1237,7 @@ Many root npm scripts use POSIX-style `NODE_ENV=test`. CI runs on Linux. On nati
 Mobile config:
 
 - Use `app.config.js`; there is no static `app.json`.
-- Version: `1.0.7` (canonical source: `package.json`; `app.config.js` must require it; background tracking requires matching new binaries)
+- Version: `1.1.0` (canonical source: `package.json`; `app.config.js` must require it; native App Check requires matching new binaries)
 - iOS build number: `3` local baseline; production increments are managed remotely by EAS
 - Android version code: `3` local baseline; production increments are managed remotely by EAS
 - Runtime version policy: `appVersion`
@@ -1275,7 +1272,7 @@ Production EAS versioning:
 - Current iOS submit profile stores only non-secret bundle metadata in `eas.json`; GitHub Actions injects App Store Connect IDs/API key material at runtime.
 - Production config runs `plugins/withProductionReleaseCleanup.js` to remove Expo Dev Launcher local-network iOS metadata and Android overlay permission from store/TestFlight native config.
 - The TestFlight workflow validates App Store Connect inputs before building, but only writes the `.p8` API key after the EAS build is complete so the key is never included in the build upload context.
-- Driver Tour Pack v1.0.4 is compile-time TestFlight-eligible but still requires the independently revocable `driver_tour_pack_feature_flags/testflight` server flag; keep the production `global` flag false until the complete field-drill and release matrix has passed.
+- Driver Tour Pack admission requires an explicit driver exception; a generic TestFlight flag grants no capability. Keep the production `global` flag false until the complete field-drill and release matrix has passed.
   Do not use a general production rollout, App Store submission, or broad OTA cohort as evidence for this
   operational feature.
 
@@ -1329,7 +1326,7 @@ GitHub Actions:
   - runs mobile, Functions script, and Firebase rules tests
   - validates env and syncs EAS production env
 - `.github/workflows/eas-update.yml`
-  - iOS OTA update to the isolated `testflight` channel on `main` push or manual dispatch
+  - planning only on `main` push; OTA publication requires explicit manual dispatch
   - verifies commit is on `main`
   - Node 24, root dependencies, iOS env validation and production EAS env sync
   - intentionally does not repeat the full test matrix; affected tests and one complete repository pass must be green before merge
@@ -1414,6 +1411,10 @@ When changing a data contract:
 
 Notification reporting contract:
 
+- New jobs require `indexed_v1` audience discovery and exact current device/consent/membership revisions. Never fall back to historical profile tokens.
+- Device/consent/category publication uses an exact installation epoch and rules-mediated atomic operation; a preflight check cannot fence an already queued write.
+- Accounting retains 256 bounded shards with a fixed seven-value contribution vector and permanent retention fences. Preserve version-conditional reconciliation.
+- Stop and drain obsolete deployed consumers before activating isolated v2 writers. Preserve old delivery evidence; an empty old queue does not prove outstanding provider requests ended.
 - Keep `ticket_accepted`, `provider_accepted`, known rejection, and `submission_unknown` distinct.
 - Keep terminal `ticket_rejected` distinct from later receipt-level `provider_rejected`; both retain
   the first completion timestamp and may enter only the bounded manual requeue workflow.
@@ -1549,3 +1550,22 @@ npm run dev
 cd functions
 npm run serve
 ```
+
+## First public launch staff and issuance authority (24 October 2026)
+
+- Driver IDs are public identifiers. `verifyDriverLogin` requires an independent
+  admin-issued one-time device enrolment secret; never restore ID-only admission.
+- Staff approval is private, generation-bound and exact-session-bound. Admin
+  replace/revoke denies access immediately through Functions and RTDB rules.
+  Management requires a recent verified TOTP sign-in; driver privilege is separate.
+- Session issuance uses the supported downscoped Admin SDK auth override. The
+  private per-installation operation and exact write manifest are checked by rules
+  at the actual server commit, protecting all canonical and derived authority
+  against queued obsolete writes. Do not replace this with an Admin root update
+  or claim a preflight/lease check fences a queued write.
+- `app_session_authority` is durable security state. Never delete its ended/deleted
+  fences as ordinary tester/cache cleanup. Older real imported bookings are unchanged.
+- Run `tests/sessionPublicationAuthority.emulator.test.js` with real Database SDK
+  connections and exact repository rules; unit mocks are not proof of queued-write safety.
+- Contract: `docs/data-contracts/staff-device-enrolment.md`. No production reset,
+  deployment, messaging or publication is authorised by these repository changes.

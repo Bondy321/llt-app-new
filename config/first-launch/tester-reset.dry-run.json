@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mode": "dry-run-only",
+  "projectId": "loch-lomond-travel",
+  "allowlistedInstallations": [],
+  "requiredEvidencePerInstallation": ["exactAuthUid", "ownerConfirmedSyntheticProvenance", "currentSessionId", "relatedRecordInventory", "backupReference"],
+  "preserve": ["business tours and bookings", "manual additions", "manifests and boarding history", "source archives and transfer journals", "marketing consent", "operational media", "accepted deletion receipts/barriers", "permanent security tombstones", "unsent current actions", "pending logout and tracking withdrawal"],
+  "oldNotificationWork": {
+    "action": "retain evidence; stop obsolete consumers before new writers",
+    "inventoryRequired": ["jobs", "attempts", "deduplication", "coalescing", "fanout", "retry", "receipt", "source-status", "retention"]
+  },
+  "sharedWritesExecuted": false
+}

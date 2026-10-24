@@ -417,11 +417,11 @@ export default function AppShell() {
     user?.uid,
   ]);
 
-  const repairIdentityBindingFromSession = (...args) => runRepairIdentityBindingFromSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, normalizePassengerEmail, persistPassengerIdentityForUser, setIdentityBinding, toRealtimeKeySegment }, ...args);
+  const repairIdentityBindingFromSession = (...args) => runRepairIdentityBindingFromSession({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, normalizePassengerEmail, persistPassengerIdentityForUser, setIdentityBinding, toRealtimeKeySegment, appSessionRef, appSessionService }, ...args);
 
-  const hydrateIdentityBindingForCurrentUser = (...args) => runHydrateIdentityBindingForCurrentUser({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, repairIdentityBindingFromSession, setIdentityBinding, toRealtimeKeySegment }, ...args);
+  const hydrateIdentityBindingForCurrentUser = (...args) => runHydrateIdentityBindingForCurrentUser({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, repairIdentityBindingFromSession, setIdentityBinding, toRealtimeKeySegment, appSessionRef, appSessionService }, ...args);
 
-  const initializeApp = (...args) => runInitializeApp({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }, ...args);
+  const initializeApp = (...args) => runInitializeApp({ isConnected, isCurrent: (() => { const generation = sessionGenerationRef.current; return () => generation === sessionGenerationRef.current; })(), SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser }, ...args);
 
   const retryInitialization = (...args) => runRetryInitialization({ initializeApp, setAuthError, setInitializing }, ...args);
 
@@ -562,6 +562,7 @@ export default function AppShell() {
       retryAccountDeletion={retryAccountDeletion}
       finishAccountDeletion={finishAccountDeletion}
       routerProps={{
+        appSession,
         bookingData: displayBooking,
         canonicalIdentity,
         currentScreen,

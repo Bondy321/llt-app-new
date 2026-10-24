@@ -172,9 +172,9 @@ test('attention CLI is read-only by default and mutations require exact paused i
 
   const jobId = 'private-job';
   const db = createNotificationRetentionMemoryDb({
-    notification_retention_rollout: { v1: { schemaVersion: 1, phase: 'paused', revision: 4,
+    notification_retention_rollout: { v2: { schemaVersion: 1, phase: 'paused', revision: 4,
       preparationComplete: false, updatedAtMs: nowMs } },
-    notification_retention: { v1: { attention: { [jobId]: {
+    notification_retention: { v2: { attention: { [jobId]: {
       jobId, generation: 2, status: 'requires_attention', reasonCode: 'bounded_reason',
       attentionFingerprint: `attention_v1_${'a'.repeat(32)}`,
     } } } },
@@ -187,7 +187,7 @@ test('attention CLI is read-only by default and mutations require exact paused i
     options: { action: 'inspect', confirmProject: 'project-test', jobId },
     retention: {
       NOTIFICATION_RETENTION_PATHS: {
-        attention: 'notification_retention/v1/attention', jobs: 'notification_retention/v1/jobs',
+        attention: 'notification_retention/v2/attention', jobs: 'notification_retention/v2/jobs',
       },
       readNotificationRetentionRollout: async () => ({ phase: 'paused', revision: 4 }),
     },
@@ -398,10 +398,10 @@ test('preflight rules checks exact privacy values and per-root indexes', () => {
         v1: { jobs: { '.indexOn': ['retentionDueAtMs', 'status', 'phase'] } },
       },
       notification_retention_rollout: { '.read': false, '.write': false },
-      notification_jobs: { '.indexOn': ['retentionDueAtMs'] },
-      notification_delivery_attempts: { '.indexOn': ['retentionDueAtMs', 'updatedAtMs'] },
+      notification_jobs_v2: { '.indexOn': ['retentionDueAtMs'] },
+      notification_delivery_attempts_v2: { '.indexOn': ['retentionDueAtMs', 'updatedAtMs'] },
       marketing_notification_details: { '.indexOn': ['retentionDueAtMs'] },
-      notification_requeue_jobs: { '.indexOn': ['expiresAtMs', 'recoveryDueAtMs'] },
+      notification_requeue_jobs_v2: { '.indexOn': ['expiresAtMs', 'recoveryDueAtMs'] },
     },
   };
   assert.deepEqual(Object.values(preflightScript.inspectRetentionRules(validRules)), [
@@ -410,7 +410,7 @@ test('preflight rules checks exact privacy values and per-root indexes', () => {
   const unsafe = clone(validRules);
   unsafe.rules.notification_retention['.read'] = true;
   unsafe.rules.notification_retention_rollout['.write'] = 'auth != null';
-  unsafe.rules.notification_jobs['.indexOn'] = ['updatedAtMs'];
+  unsafe.rules.notification_jobs_v2['.indexOn'] = ['updatedAtMs'];
   const inspected = preflightScript.inspectRetentionRules(unsafe);
   assert.equal(inspected.retentionRootPrivate, false);
   assert.equal(inspected.rolloutRootPrivate, false);
@@ -420,7 +420,7 @@ test('preflight rules checks exact privacy values and per-root indexes', () => {
 test('a completed zero-result requeue replay restores terminal status and durable retention', async () => {
   const jobId = 'notif_v1_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
   const db = createNotificationRetentionMemoryDb({
-    notification_jobs: {
+    notification_jobs_v2: {
       [jobId]: {
         schemaVersion: 1,
         jobId,
@@ -432,7 +432,7 @@ test('a completed zero-result requeue replay restores terminal status and durabl
         updatedAtMs: nowMs - 1,
       },
     },
-    notification_requeue_jobs: {
+    notification_requeue_jobs_v2: {
       [jobId]: {
         schemaVersion: 1,
         requeueId: 'requeue_v1_test',
@@ -449,8 +449,8 @@ test('a completed zero-result requeue replay restores terminal status and durabl
   const replayed = await requeueFailedNotificationJob({ db, jobId, nowMs });
   assert.equal(replayed.success, true);
   assert.equal(replayed.complete, true);
-  assert.equal(db.getAtPath(`notification_jobs/${jobId}/status`), 'provider_rejected');
-  assert.equal(Object.keys(db.getAtPath('notification_retention/v1/queue') || {}).length, 1);
+  assert.equal(db.getAtPath(`notification_jobs_v2/${jobId}/status`), 'provider_rejected');
+  assert.equal(Object.keys(db.getAtPath('notification_retention/v2/queue') || {}).length, 1);
 });
 
 test('authoritative per-job scheduling survives a foreign compatibility queue projection', async () => {
@@ -467,15 +467,15 @@ test('authoritative per-job scheduling survives a foreign compatibility queue pr
   };
   const queueKey = buildRetentionQueueKey(jobId, nowMs, 1);
   const db = createNotificationRetentionMemoryDb({
-    notification_jobs: { [jobId]: job },
+    notification_jobs_v2: { [jobId]: job },
     notification_retention: {
-      v1: { queue: { [queueKey]: { jobId: 'foreign-job', generation: 1 } } },
+      v2: { queue: { [queueKey]: { jobId: 'foreign-job', generation: 1 } } },
     },
   });
   const scheduled = await notificationPublic.scheduleNotificationRetentionIfEligible(db, job, nowMs);
   assert.equal(scheduled.reason, 'scheduled');
-  assert.equal(db.getAtPath(`notification_retention/v1/jobs/${jobId}/jobId`), jobId);
-  assert.equal(db.getAtPath(`notification_retention/v1/queue/${queueKey}/jobId`), 'foreign-job');
+  assert.equal(db.getAtPath(`notification_retention/v2/jobs/${jobId}/jobId`), jobId);
+  assert.equal(db.getAtPath(`notification_retention/v2/queue/${queueKey}/jobId`), 'foreign-job');
 });
 
 test('marketing detail replay preserves exact ownership and rejects reused source paths', async () => {
@@ -519,8 +519,8 @@ test('marketing detail replay preserves exact ownership and rejects reused sourc
 test('fenced fanout preserves and defers the exact queue pointer', async () => {
   const queueKey = `${nowMs}~fanout~000001`;
   const db = createMemoryDb({
-    notification_jobs: { job_fenced: { ...fencedJob('job_fenced'), queueKey, queueVersion: 1 } },
-    notification_job_fanout_queue: {
+    notification_jobs_v2: { job_fenced: { ...fencedJob('job_fenced'), queueKey, queueVersion: 1 } },
+    notification_job_fanout_queue_v2: {
       [queueKey]: { targetId: 'job_fenced', dueAtMs: nowMs, version: 1, lease: { ownerId: 'worker', expiresAtMs: nowMs + 1 } },
     },
   });
@@ -528,17 +528,17 @@ test('fenced fanout preserves and defers the exact queue pointer', async () => {
     db, jobId: 'job_fenced', nowMs, queueKey, queueVersion: 1, queueOwnerId: 'worker',
   });
   assert.equal(result.status, 'retention_fenced');
-  assert.equal(db.state.notification_job_fanout_queue[queueKey].targetId, 'job_fenced');
-  assert.equal(db.state.notification_job_fanout_queue[queueKey].lease, null);
-  assert.equal(db.state.notification_job_fanout_queue[queueKey].dueAtMs, nowMs + 120_000);
+  assert.equal(db.state.notification_job_fanout_queue_v2[queueKey].targetId, 'job_fenced');
+  assert.equal(db.state.notification_job_fanout_queue_v2[queueKey].lease, null);
+  assert.equal(db.state.notification_job_fanout_queue_v2[queueKey].dueAtMs, nowMs + 120_000);
 });
 
 test('fenced receipt and retry attempts preserve and defer exact queue pointers', async () => {
   const receiptKey = `${nowMs}~receipt~000001`;
   const retryKey = `${nowMs}~retry~000001`;
-  const db = createMemoryDb({
-    notification_jobs: { job_fenced: fencedJob('job_fenced') },
-    notification_delivery_attempts: {
+  const db = createNotificationRetentionMemoryDb({
+    notification_jobs_v2: { job_fenced: fencedJob('job_fenced') },
+    notification_delivery_attempts_v2: {
       receipt_attempt: {
         attemptId: 'receipt_attempt', jobId: 'job_fenced', queueKey: receiptKey, queueVersion: 1,
         status: 'receipt_pending', receiptStatus: 'receipt_pending', ticketId: 'ticket',
@@ -548,11 +548,11 @@ test('fenced receipt and retry attempts preserve and defer exact queue pointers'
         status: 'retrying', availableAtMs: nowMs,
       },
     },
-    notification_receipt_due_queue: {
-      [receiptKey]: { targetId: 'receipt_attempt', dueAtMs: nowMs, version: 1 },
+    notification_receipt_due_queue_v2: {
+      [receiptKey]: { targetId: 'receipt_attempt', dueAtMs: nowMs, version: 1, serviceKey: `operational~${nowMs}` },
     },
-    notification_attempt_retry_queue: {
-      [retryKey]: { targetId: 'retry_attempt', dueAtMs: nowMs, version: 1 },
+    notification_attempt_retry_queue_v2: {
+      [retryKey]: { targetId: 'retry_attempt', dueAtMs: nowMs, version: 1, serviceKey: `operational~${nowMs}` },
     },
   });
   let providerCalls = 0;
@@ -565,8 +565,8 @@ test('fenced receipt and retry attempts preserve and defer exact queue pointers'
   assert.equal(receipts.checked, 0);
   assert.equal(retries.retried, 0);
   assert.equal(providerCalls, 0);
-  assert.equal(db.state.notification_receipt_due_queue[receiptKey].dueAtMs, nowMs + 120_000);
-  assert.equal(db.state.notification_attempt_retry_queue[retryKey].dueAtMs, nowMs + 120_000);
-  assert.equal(db.state.notification_receipt_due_queue[receiptKey].lease, null);
-  assert.equal(db.state.notification_attempt_retry_queue[retryKey].lease, null);
+  assert.equal(db.data.notification_receipt_due_queue_v2[receiptKey].dueAtMs, nowMs + 120_000);
+  assert.equal(db.data.notification_attempt_retry_queue_v2[retryKey].dueAtMs, nowMs + 120_000);
+  assert.equal(db.data.notification_receipt_due_queue_v2[receiptKey].lease, null);
+  assert.equal(db.data.notification_attempt_retry_queue_v2[retryKey].lease, null);
 });

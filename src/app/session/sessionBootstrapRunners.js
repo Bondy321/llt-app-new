@@ -12,7 +12,7 @@ export const runRefreshAppData = async ({ bookingService, chatService, driverTou
     ]);
   };
 
-export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, accountDeletionService, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser, toAccountDeletionUiState }) => {
+export const runInitializeApp = async ({ isConnected, isCurrent = () => true, startupDecisionTimeoutMs = 5000, SESSION_KEYS, STARTUP_CONNECTION_ERROR_MESSAGE, SessionStorage, accountDeletionService, appSessionService, authHelpers, authUnsubscribeRef, handleAuthStateChange, hydrateIdentityBindingForCurrentUser, localSessionCleanupService, logger, maskIdentifier, recordCrashBreadcrumb, restoreSession, setAccountDeletionStatus, setAppSession, setAuthError, setDiagnosticsAuthUid, setInitializing, setLogoutStatus, setUser, toAccountDeletionUiState }) => {
     const deletionService = accountDeletionService || defaultAccountDeletionService;
     const projectDeletionUiState = toAccountDeletionUiState || defaultToAccountDeletionUiState;
     let unsubscribe = null;
@@ -43,6 +43,12 @@ export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_
         logger.info('Auth', 'User authenticated', { uid: maskIdentifier(currentUser.uid) });
       }
 
+      const interruptedCleanup = await localSessionCleanupService.readPendingCleanup?.();
+      if (interruptedCleanup) {
+        if (interruptedCleanup.authUid !== currentUser?.uid) throw new Error('Local cleanup belongs to the original installation');
+        const recovered = await localSessionCleanupService.cleanup(interruptedCleanup);
+        if (!recovered.success) throw new Error('Local cleanup is still pending. Please retry.');
+      }
       const pendingEnd = await appSessionService.readPendingEnd();
       if (pendingEnd) {
         const [savedTourEntry, savedBookingEntry] = await SessionStorage.multiGet([
@@ -68,25 +74,33 @@ export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_
         });
       } else {
         const cachedSession = await appSessionService.readSession();
+        const networkDecisionDeadline = Date.now() + Math.min(5000, Math.max(1, startupDecisionTimeoutMs));
         let activeSession = cachedSession;
-        if (cachedSession && currentUser?.uid) {
+        if (cachedSession && currentUser?.uid && isConnected !== false) {
           try {
             const verification = await appSessionService.verifyCurrent({
               authUid: currentUser.uid,
               expectedSession: cachedSession,
               allowDriverAssignment: cachedSession.principalType === 'driver',
+              timeoutMs: Math.max(1, networkDecisionDeadline - Date.now()),
             });
+            if (!isCurrent()) return null;
             activeSession = verification.valid ? verification.session : null;
-            if (activeSession) await appSessionService.persistSession(activeSession);
+            if (activeSession) {
+              const saved = await appSessionService.persistSession(activeSession, { isCurrent });
+              if (!saved || !isCurrent()) return null;
+            }
           } catch (error) {
             // A still-unexpired cached session is the only bounded offline restore.
             // Reconnect validation and the remote listener remain mandatory.
-            activeSession = cachedSession;
+            if (!isCurrent()) return null;
+            activeSession = cachedSession.expiresAtMs > Date.now() ? cachedSession : null;
             logger.warn('Session', 'Secure session verification deferred while offline', {
               error: error?.message || String(error),
             });
           }
         }
+        if (!isCurrent()) return null;
         if (!activeSession) {
           await appSessionService.clearSession();
           await restoreSession(null);
@@ -94,7 +108,11 @@ export const runInitializeApp = async ({ SESSION_KEYS, STARTUP_CONNECTION_ERROR_
         } else {
           setAppSession(activeSession);
           await restoreSession(activeSession);
-          await hydrateIdentityBindingForCurrentUser(currentUser.uid);
+          if (isConnected !== false && networkDecisionDeadline > Date.now()) {
+            await hydrateIdentityBindingForCurrentUser(currentUser.uid, {
+              isConnected, timeoutMs: Math.max(1, networkDecisionDeadline - Date.now()),
+            });
+          }
         }
       }
 

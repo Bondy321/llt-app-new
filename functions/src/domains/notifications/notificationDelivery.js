@@ -19,13 +19,7 @@ const {
   resolveTourNotificationCategoryLabel,
   resolveTrimmedString,
 } = require('./notificationPolicy');
-const {
-  driverBindingAllowedByPolicy,
-  driverSessionMatchesPolicyGeneration,
-  readDriverLoginPolicy,
-} = require('../driver-auth/public');
-
-const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
+const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
 const USER_PROFILE_FETCH_CHUNK_SIZE = 100;
 
@@ -79,31 +73,15 @@ const loadDriverProfile = async (driverId) => {
 };
 
 /** @type {(...args: any[]) => Promise<string[]>} */
-const loadDriverSessionAuthUids = async (driverId, { tourId, driverData, db = admin.database(), nowMs = Date.now() }) => {
-  const [sessionsSnapshot, policyContext] = await Promise.all([
-    db.ref('app_sessions').orderByChild('driverId').equalTo(driverId).once('value'),
-    readDriverLoginPolicy({ db }),
-  ]);
-  const candidates = Object.entries(sessionsSnapshot.val() || {});
+const loadDriverSessionAuthUids = async (driverId, { tourId, db = admin.database(), nowMs = Date.now() }) => {
+  const snapshot = await db.ref('app_sessions').orderByChild('driverId').equalTo(driverId).once('value');
+  const candidates = Object.entries(snapshot.val() || {});
   const results = await Promise.all(candidates.map(async ([authUid, sessionValue]) => {
     const session = /** @type {any} */ (sessionValue);
-    if (!isValidFirebaseKey(authUid)
-      || !isActiveSessionRecord(session, { nowMs })
-      || session.authUid !== authUid
-      || session.principalType !== 'driver'
-      || session.driverId !== driverId
-      || session.tourId !== tourId
-      || !driverSessionMatchesPolicyGeneration(session, policyContext.policy)
-      || !driverBindingAllowedByPolicy({
-        policy: policyContext.policy, authUid, claimedAuthUid: driverData?.authUid,
-      })) return null;
-    const profile = (await db.ref(`users/${authUid}`).once('value')).val() || {};
-    return profile.driverId === driverId
-      && profile.driverPrincipalId === session.principalId
-      && profile.principalType === 'driver'
-      && profile.driverAssignedTourId === tourId
-      ? authUid
-      : null;
+    if (!isValidFirebaseKey(authUid) || session?.driverId !== driverId || session.tourId !== tourId) return null;
+    const authority = await verifyActiveAppSession({ db, authUid, expectedRole: 'driver',
+      expectedTourId: tourId, expectedSessionId: session.sessionId, nowMs });
+    return authority.allowed && authority.driverId === driverId ? authUid : null;
   }));
   return results.filter(Boolean).sort((left, right) => left.localeCompare(right));
 };

@@ -51,17 +51,18 @@ test('validateExpoPublicEnv rejects unresolved EAS aliases and placeholders', ()
   assert.ok(result.errors.some((error) => error.includes('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN')));
 });
 
-test('production validation permits explicit App Check disable and validates an opt-in rollout', () => {
+test('production validation requires App Check and the supported passenger trip surface', () => {
   const rejected = validateExpoPublicEnv(validEnv, {
     platform: 'ios', requireProductionAppCheck: true,
   });
   assert.equal(rejected.ok, false);
-  assert.equal(rejected.errors.filter((error) => error.includes('must be exactly true')).length, 2);
+  assert.equal(rejected.errors.filter((error) => error.includes('must be exactly true')).length, 3);
 
   const accepted = validateExpoPublicEnv({
     ...validEnv,
     EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'true',
     EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'true',
+    EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: 'true',
   }, { platform: 'ios', requireProductionAppCheck: true });
   assert.equal(accepted.ok, true);
 
@@ -69,7 +70,7 @@ test('production validation permits explicit App Check disable and validates an 
     ...validEnv,
     EAS_BUILD_PROFILE: 'production',
   }, { platform: 'ios' });
-  assert.equal(profileAccepted.ok, true);
+  assert.equal(profileAccepted.ok, false);
 
   const inconsistent = validateExpoPublicEnv({
     ...validEnv,
@@ -79,12 +80,13 @@ test('production validation permits explicit App Check disable and validates an 
   assert.ok(inconsistent.errors.some((error) => error.includes('cannot be true unless')));
 });
 
-test('production and TestFlight workflows explicitly disable App Check until registration is complete', () => {
+test('production and TestFlight workflows require App Check and enable supported passenger trips', () => {
   for (const filename of ['eas-build.yml', 'eas-update.yml', 'eas-testflight.yml']) {
     const source = readFileSync(resolve(__dirname, `../.github/workflows/${filename}`), 'utf8');
-    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'false'/);
-    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'false'/);
-    assert.match(source, /LLT_REQUIRE_PRODUCTION_APPCHECK:\s*'false'/);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK:\s*'true'/);
+    assert.match(source, /EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK:\s*'true'/);
+    assert.match(source, /LLT_REQUIRE_PRODUCTION_APPCHECK:\s*'true'/);
+    assert.match(source, /EXPO_PUBLIC_PASSENGER_TRIP_ENABLED:\s*'true'/);
   }
 });
 

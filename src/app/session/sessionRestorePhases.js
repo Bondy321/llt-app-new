@@ -86,16 +86,17 @@ const matchesActiveSession = (validAppSession, projection) => {
     && !(validAppSession.tourId && !tourData);
 };
 
-const persistNormalizedPassengerProjection = async (deps, projection) => {
-  if (projection.isDriverBooking) return;
-  const { SESSION_KEYS, SessionStorage } = deps;
-  await SessionStorage.multiSet([
+const persistNormalizedPassengerProjection = async (deps, projection, session) => {
+  if (projection.isDriverBooking) return true;
+  const { SESSION_KEYS } = deps;
+  return deps.appSessionService.persistProjection({ expectedSession: session,
+    isCurrent: () => deps.appSessionRef.current === session, entries: [
     [SESSION_KEYS.TOUR_DATA, JSON.stringify(projection.tourData)],
     [SESSION_KEYS.BOOKING_DATA, JSON.stringify(projection.bookingData)],
-  ]);
+  ] });
 };
 
-const applyRestoredProjection = (deps, projection, lastScreen) => {
+const applyRestoredProjection = (deps, projection) => {
   const {
     routeHistoryRef,
     setBookingData,
@@ -104,9 +105,11 @@ const applyRestoredProjection = (deps, projection, lastScreen) => {
     setTourData,
   } = deps;
   const { bookingData, tourData } = projection;
-  const screen = lastScreen[1] || 'Login';
   const fallbackScreen = bookingData.id && bookingData.id.startsWith('D-') ? 'DriverHome' : 'TourHome';
-  const restoredScreen = screen === 'Login' || screen === 'NotificationPreferences' ? fallbackScreen : screen;
+  // Detail-route inputs are deliberately transient. Only the verified Home
+  // projection survives process death; arbitrary old route names cannot restore
+  // an incomplete detail or another logical user's historical parameters.
+  const restoredScreen = fallbackScreen;
   setBookingData(bookingData);
   setTourData(tourData);
   if (tourData) setTourCode(tourData.tourCode);
@@ -142,8 +145,9 @@ export const restoreStoredSessionProjection = async (deps, validAppSession, save
     logger.warn('Session', 'Saved app data does not match the active secure session');
     return false;
   }
-  await persistNormalizedPassengerProjection(deps, projection);
-  applyRestoredProjection(deps, projection, lastScreen);
+  if (!await persistNormalizedPassengerProjection(deps, projection, validAppSession)) return false;
+  if (deps.appSessionRef.current !== validAppSession) return false;
+  applyRestoredProjection(deps, projection);
   return true;
 };
 

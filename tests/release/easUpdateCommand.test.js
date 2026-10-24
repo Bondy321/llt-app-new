@@ -9,7 +9,7 @@ test('central update runner owns explicit profile, channel, platform, environmen
   for (const [targetName, expected] of Object.entries({
     development: ['development', 'development', 'all', 'false'],
     preview: ['preview', 'preview', 'all', 'false'],
-    testflight: ['testflight', 'production', 'ios', 'true'],
+    testflight: ['testflight', 'production', 'ios', 'false'],
     production: ['production', 'production', 'all', 'false'],
   })) {
     let invocation;
@@ -32,6 +32,7 @@ test('central update runner owns explicit profile, channel, platform, environmen
     ]);
     assert.equal(invocation.options.env.EAS_BUILD_PROFILE, profile);
     assert.equal(invocation.options.env.EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT, featureFlag);
+    assert.equal(invocation.options.env.EXPO_PUBLIC_PASSENGER_TRIP_ENABLED, ['production', 'testflight'].includes(targetName) ? 'true' : 'false');
     assert.deepEqual(result.parity.differences, []);
     assert.doesNotMatch(log, /secret-sentinel/u);
   }

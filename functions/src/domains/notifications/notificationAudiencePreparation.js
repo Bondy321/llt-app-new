@@ -18,7 +18,7 @@ const createNotificationAudiencePreparation = ({
   /** @param {any} db @param {string} jobId @param {string} authUid @param {string} pageId */
   const claimAudienceCandidate = async (db, jobId, authUid, pageId, metrics = null) => {
     recordMetric(metrics, 'transactionAttempts');
-    const claim = await db.ref(`notification_job_audience_claims/${jobId}/${authUid}`)
+    const claim = await db.ref(`notification_job_audience_claims_v2/${jobId}/${authUid}`)
       .transaction((current) => current || pageId);
     return claim?.snapshot?.val?.() === pageId;
   };
@@ -111,7 +111,7 @@ const createNotificationAudiencePreparation = ({
       const indexedEligible = indexedOutcomes.filter((outcome) => outcome.result.eligible);
       const legacyClaims = await mapWithConcurrency(indexedEligible, MAX_CONCURRENCY, async (outcome) => {
         recordMetric(metrics, 'rtdbDirectReads');
-        const claim = await db.ref(`notification_job_audience_claims/${job.jobId}/${outcome.candidate.authUid}`)
+        const claim = await db.ref(`notification_job_audience_claims_v2/${job.jobId}/${outcome.candidate.authUid}`)
           .once('value');
         return claim.exists();
       });

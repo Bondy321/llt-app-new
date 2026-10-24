@@ -4,15 +4,18 @@
 
 /** @param {any[]} items @param {number} concurrency @param {(item: any) => Promise<any>} callback */
 const mapWithConcurrency = async (items, concurrency, callback) => {
-  const results = new Array(items.length); let nextIndex = 0;
+  const results = new Array(items.length); let nextIndex = 0; let failed = false; let failure;
   const worker = async () => {
-    while (nextIndex < items.length) {
+    while (!failed && nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await callback(items[index]);
+      try { results[index] = await callback(items[index]); } catch (error) {
+        if (!failed) { failed = true; failure = error; }
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  if (failed) throw failure;
   return results;
 };
 

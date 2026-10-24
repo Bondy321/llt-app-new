@@ -19,7 +19,8 @@ const SID = sessionIdFor(UID);
 const REVISION = 'a'.repeat(64);
 const PASSENGER = `srcpax_v1_${'b'.repeat(64)}`;
 let env; let databaseUrl;
-const client = (uid = UID) => env.authenticatedContext(uid).database(databaseUrl);
+const client = (uid = UID) => env.authenticatedContext(uid, uid === ADMIN_UID
+  ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(databaseUrl);
 const allow = (operation, key) => assertSucceeds(operation).catch(error => {
   error.message = `${key}: ${error.message}`;
   throw error;
@@ -62,8 +63,6 @@ const writes = tourId => [
   [`chats/${tourId}/messages/new_${tourId}`, message(`new_${tourId}`)],
   [`chats/${tourId}/messages/seeded/reactions/like/${PRINCIPAL}`, true],
   [`chats/${tourId}/lastRead/${PRINCIPAL}`, Date.now()],
-  [`chats/${tourId}/typing/${PRINCIPAL}`, { name: 'Synthetic passenger', isDriver: false, timestamp: { '.sv': 'timestamp' } }],
-  [`chats/${tourId}/presence/${PRINCIPAL}`, { name: 'Synthetic passenger', isDriver: false, lastSeen: { '.sv': 'timestamp' }, online: true }],
   [`chat_presence_sessions/group/${SID}`, rawStatus(tourId, 'presence')],
   [`chat_typing_sessions/group/${SID}`, rawStatus(tourId, 'typing')],
   ...['group_tour_photos', `private_tour_photos`].flatMap(root => {
@@ -107,7 +106,7 @@ const seed = async () => {
   }
   await adminWrite({ ...content, ...profile,
     ...driverAuthorityUpdates({ uid: DRIVER_UID, driverId: 'D-SOURCE-SCOPE', tourId: OLD, nowMs: now }),
-    [`passenger_identity_security/${BOOKING}`]: { passengerPrincipalId: PRINCIPAL, authorizedAuthUid: UID, passengerIdentityVersion: 'pax_v2' },
+    [`passenger_identity_security/${BOOKING}/passengerIdentityVersion`]: 'pax_v2',
     [`passenger_trip_signals/v1/bookings/${BOOKING}`]: { booking: 1 },
     [`booking_access_grants/${BOOKING}/${UID}`]: { source: 'verifyPassengerLogin', bookingRef: BOOKING, tourId: OLD,
       grantedAt: new Date(now).toISOString(), grantedAtMs: now, expiresAtMs: now + 3600000 },
@@ -137,6 +136,14 @@ test('the active canonical source passenger can use every inventoried native rea
   }
 });
 
+test('current source authority does not restore retired direct chat projections or client account deletion', async () => {
+  const db = client();
+  await assertSucceeds(db.ref(`chat_presence_sessions/group/${SID}`).set(rawStatus(OLD, 'presence')));
+  await assertFails(db.ref(`chats/${OLD}/presence/${PRINCIPAL}`).set({ online: true, lastSeen: Date.now() }));
+  await assertFails(db.ref(`chats/${OLD}/typing/${PRINCIPAL}`).set({ name: 'Passenger', timestamp: Date.now() }));
+  await assertFails(db.ref(`users/${UID}`).remove());
+});
+
 for (const [name, patch] of [
   ['tour transfer', { [`bookings/${BOOKING}/tourId`]: NEXT }],
   ['source absence', { [`bookings/${BOOKING}/sourceRoster/state`]: 'not_in_report' }],
@@ -159,9 +166,10 @@ for (const [name, patch] of [
   assert.deepEqual(await readValue(`chats/${OLD}`), oldChat);
   assert.deepEqual(await readValue(`tours/${OLD}/participants/${UID}`), oldParticipant);
   assert.deepEqual(await readValue(`tour_manifests/${OLD}/bookings/${BOOKING}`), oldManifest);
-  // The existing compatibility account-deletion grant must not turn a missing
+  // Direct deletion is retired. Even trusted removal must not turn a missing
   // profile into a no-source legacy fallback and restore former tour access.
-  await assertSucceeds(db.ref(`users/${UID}`).remove());
+  await assertFails(db.ref(`users/${UID}`).remove());
+  await adminWrite({ [`users/${UID}`]: null });
   await assertFails(db.ref(`chats/${OLD}`).get());
   await assertFails(db.ref(`chats/${OLD}/messages/seeded`).remove());
 });
@@ -193,18 +201,19 @@ test('legacy/manual bookings retain established passenger behavior and transferr
 
 test('source booking reference bounds accept legal keys and deny path/control/length corruption', async () => {
   const source = await readValue(`bookings/${BOOKING}`);
+  const security = await readValue(`passenger_identity_security/${BOOKING}`);
   const db = client();
   for (const ref of ['T123UF-ABC', 'SOURCE_U_F123', 'SOURCE 12 UF', 'SOURCE:123', 'A'.repeat(160)]) {
-    await adminWrite({ [`bookings/${ref}`]: source, [`users/${UID}/bookingRef`]: ref });
+    await adminWrite({ [`bookings/${ref}`]: source, [`passenger_identity_security/${ref}`]: security, [`users/${UID}/bookingRef`]: ref });
     await allow(db.ref(`chats/${OLD}`).get(), `valid reference ${JSON.stringify(ref)}`);
   }
   // A legal RTDB key over the application bound must still fail when its source
   // record exists, so this cannot pass merely because a malformed path is absent.
   const longRef = 'A'.repeat(161);
-  await adminWrite({ [`bookings/${longRef}`]: source, [`users/${UID}/bookingRef`]: longRef });
+  await adminWrite({ [`bookings/${longRef}`]: source, [`passenger_identity_security/${longRef}`]: security, [`users/${UID}/bookingRef`]: longRef });
   await assertFails(db.ref(`chats/${OLD}`).get());
   // A slash can address a real nested record. It must not confer source scope.
-  await adminWrite({ 'bookings/BAD/KEY': source, [`users/${UID}/bookingRef`]: 'BAD/KEY' });
+  await adminWrite({ 'bookings/BAD/KEY': source, 'passenger_identity_security/BAD/KEY': security, [`users/${UID}/bookingRef`]: 'BAD/KEY' });
   await assertFails(db.ref(`chats/${OLD}`).get());
   for (const ref of ['BAD.KEY', 'BAD#KEY', 'BAD$KEY', 'BAD[KEY', 'BAD]KEY', 'BAD\u0001KEY', 'BAD\u007fKEY']) {
     await adminWrite({ [`users/${UID}/bookingRef`]: ref });

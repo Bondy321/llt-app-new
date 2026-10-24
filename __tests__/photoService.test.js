@@ -11,6 +11,7 @@ require.cache[firebaseModulePath] = {
     storage: {},
     realtimeDbModular: {},
     auth: { currentUser: { uid: 'auth-upload-1' } },
+    getCurrentAppCheckToken: async () => 'synthetic-app-check',
   },
 };
 
@@ -76,29 +77,15 @@ test('uploadPhoto sends group media only through the authenticated server endpoi
   assert.strictEqual(blob.closed, true);
 });
 
-test('uploadPhoto remains authenticated when App Check is explicitly unavailable', async () => {
-  const blob = createMockBlob();
-  let serverHeaders;
-  const result = await uploadPhoto('file://group-no-app-check.jpg', 'tour-77', 'user-9', '', {
+test('uploadPhoto fails closed when App Check is unavailable', async () => {
+  const blob = createMockBlob(); let serverCalls = 0;
+  await assert.rejects(uploadPhoto('file://group.jpg', 'tour-77', 'user-9', '', {
     idempotencyKey: 'idem-group-no-app-check',
-    uploaderName: 'Driver Bond',
     authInstance: { currentUser: { uid: 'auth-1', getIdToken: async () => 'id-token' } },
-    appCheckTokenFn: async () => null,
-    groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
-    fetchFn: async (url, options) => {
-      if (url === 'file://group-no-app-check.jpg') return { ok: true, blob: async () => blob };
-      serverHeaders = options.headers;
-      return { ok: true, json: async () => ({ success: true, photo: {
-        id: 'idem-group-no-app-check', userId: 'user-9', caption: '', uploaderName: 'Driver Bond',
-        storagePath: 'group_tour_photos/tour-77/idem-group-no-app-check.jpg',
-      } }) };
-    },
-  });
-
-  assert.equal(serverHeaders.Authorization, 'Bearer id-token');
-  assert.equal(Object.prototype.hasOwnProperty.call(serverHeaders, 'x-firebase-appcheck'), false);
-  assert.equal(result.id, 'idem-group-no-app-check');
-  assert.strictEqual(blob.closed, true);
+    appCheckTokenFn: async () => null, groupUploadEndpoint: 'https://functions.test/uploadGroupPhoto',
+    fetchFn: async url => { if (url.startsWith('file:')) return { ok: true, blob: async () => blob }; serverCalls += 1; },
+  }), /App Check is required/);
+  assert.equal(serverCalls, 0); assert.equal(blob.closed, true);
 });
 
 test('uploadPhoto requires an auth uid for storage metadata', async () => {
@@ -435,7 +422,7 @@ test('fetchPrivatePhotosPage applies endBefore cursor and normalizes timestamps 
 
   assert.strictEqual(queryCalls.length, 1);
   assert.strictEqual(queryCalls[0][2], 120);
-  assert.strictEqual(queryCalls[0][3], 4);
+  assert.strictEqual(queryCalls[0][3], 5);
   assert.deepStrictEqual(result.items.map((item) => item.id), ['withDateObj', 'withNumberString', 'withInvalid']);
   assert.strictEqual(result.items[0].timestamp, Number(new Date('2026-01-01T00:00:00.000Z')));
   assert.strictEqual(result.items[2].timestamp, 0);
@@ -660,4 +647,77 @@ test('uploadPhotoDirect rejects payloadVersion=2 payloads without idempotencyKey
 
   assert.equal(result.success, false);
   assert.match(result.error, /idempotencyKey is required/);
+});
+
+const photoDeferred = () => { let done; const promise = new Promise(resolve => { done = resolve; }); return { promise, resolve: done }; };
+test('gallery credential/body stalls have a total deadline and same-UID auth replacement cannot dispatch or apply media', async () => {
+  for (const phase of ['token', 'body', 'replace-token', 'replace-body']) {
+    const gate = photoDeferred(); let started; const entered = new Promise(resolve => { started = resolve; });
+    const authInstance = { currentUser: { uid: 'same-user', getIdToken: async () => {
+      if (phase.includes('token')) { started(); return gate.promise; } return 'token';
+    } } };
+    let calls = 0; let signal;
+    const pending = resolveGroupPhotoMedia({ tourId: 'TOUR', photos: [{ id: 'photo-one' }] }, {
+      authInstance, appCheckTokenFn: async () => 'app-check', endpoint: 'https://synthetic.invalid', requestTimeoutMs: 20,
+      fetchFn: async (_url, options) => { calls += 1; signal = options.signal; return { ok: true, json: async () => { started(); return gate.promise; } }; },
+    });
+    const expected = assert.rejects(pending, { code: phase.startsWith('replace') ? 'PHOTO_IDENTITY_CHANGED' : 'PHOTO_REQUEST_TIMEOUT' });
+    await entered;
+    if (phase.startsWith('replace')) { authInstance.currentUser = { ...authInstance.currentUser }; gate.resolve(phase.includes('token') ? 'old-token' : { success: true, expiresAtMs: Date.now() + 1000, media: {} }); }
+    await expected;
+    if (phase.includes('token')) assert.equal(calls, 0); else assert.equal(signal.aborted, true);
+    gate.resolve('late'); await new Promise(resolve => setImmediate(resolve));
+    if (phase.includes('token')) assert.equal(calls, 0, 'late token must never dispatch');
+  }
+});
+
+test('upload local-file stall is bounded and cannot dispatch remotely after timeout', async () => {
+  const gate = photoDeferred(); let remoteCalls = 0;
+  const blob = createMockBlob();
+  await assert.rejects(uploadPhoto('file://synthetic.jpg', 'TOUR', 'principal', '', {
+    authInstance: { currentUser: { uid: 'device', getIdToken: async () => 'token' } },
+    appCheckTokenFn: async () => 'app-check', idempotencyKey: 'stable-upload', requestTimeoutMs: 20,
+    groupUploadEndpoint: 'https://synthetic.invalid', fetchFn: async url => {
+      if (url.startsWith('file:')) return { ok: true, blob: () => gate.promise };
+      remoteCalls += 1;
+    },
+  }), { code: 'PHOTO_REQUEST_TIMEOUT' });
+  gate.resolve(blob); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(remoteCalls, 0); assert.equal(blob.closed, true);
+});
+
+test('uncached gallery database reads fail boundedly before attempting signed media', async () => {
+  let signed = false;
+  await assert.rejects(fetchTourPhotosPage({ tourId: 'TOUR' }, {
+    realtimeDbInstance: {}, dbRefFn: mockDbRef, queryFn: () => ({}), orderByChildFn: () => ({}), limitToLastFn: () => ({}),
+    getFn: () => new Promise(() => {}), readTimeoutMs: 20,
+    resolveGroupPhotoMediaFn: async () => { signed = true; return []; },
+  }), { code: 'NETWORK_DECISION_TIMEOUT' });
+  assert.equal(signed, false);
+});
+
+test('gallery hides pending/cancelled/deleting records without losing the raw paging cursor', async () => {
+  const records = { p5: { timestamp: 5, _upload: { status: 'pending' } }, p4: { timestamp: 4, _upload: { status: 'cancelled' } },
+    p3: { timestamp: 3, _serverDeletion: { status: 'deleting' } }, p2: { timestamp: 2, _upload: { status: 'complete' } }, p1: { timestamp: 1 } };
+  const deps = { realtimeDbInstance: {}, dbRefFn: mockDbRef, queryFn: () => ({}), orderByChildFn: () => ({}), limitToLastFn: () => ({}),
+    getFn: async () => mockSnapshot(records), resolveGroupPhotoMediaFn: async ({ photos }) => photos };
+  const result = await fetchTourPhotosPage({ tourId: 'TOUR', limit: 3 }, deps);
+  assert.deepEqual(result.items, []); assert.equal(result.hasMore, true); assert.deepEqual(result.nextCursor, { timestamp: 3, id: 'p3' });
+  let listener; let output;
+  const stop = subscribeToTourPhotos('TOUR', value => { output = value; }, { ...deps,
+    onValueFn: (_query, callback) => { listener = callback; return () => {}; } });
+  listener(mockSnapshot(records)); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(output.map(photo => photo.id), ['p2', 'p1']); stop();
+});
+
+test('caption update deadline preserves an ambiguous write and never claims late success', async () => {
+  let release; let writes = 0;
+  const pendingWrite = new Promise(resolve => { release = resolve; });
+  const request = updatePhotoCaption({ tourId: 'tour-77', photoId: 'photo-1', userId: 'owner-1', caption: 'Updated caption' }, {
+    realtimeDbInstance: {}, dbRefFn: mockDbRef, requestTimeoutMs: 15,
+    updateFn: () => { writes++; return pendingWrite; }, serverTimestampFn: () => 100, nowFn: () => 100,
+  });
+  await assert.rejects(request, error => error.code === 'REQUEST_TIMEOUT' && /may still complete/.test(error.message));
+  release(); await new Promise(setImmediate);
+  assert.equal(writes, 1, 'timeout must neither retry nor delete the dispatched mutation');
 });

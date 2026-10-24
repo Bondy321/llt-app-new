@@ -15,7 +15,7 @@ const {
 } = require('./notificationRetentionIntegration');
 const { buildNotificationQueueKey, buildQueueEntry, QUEUE_ROOTS, transitionQueuedRecord } = require('./notificationQueues');
 
-const JOB_SCHEMA_VERSION = 1;
+const JOB_SCHEMA_VERSION = 2;
 const MAX_TITLE_LENGTH = 120;
 const MAX_BODY_LENGTH = 500;
 const MAX_DATA_BYTES = 3072;
@@ -54,7 +54,7 @@ const buildNotificationJobId = (sourceType, sourceId) => {
   const type = boundedString(sourceType, 80);
   const id = boundedString(sourceId, 768);
   if (!type || !id) throw new Error('Notification source identity is required');
-  return `notif_v1_${createHash('sha256').update(`${type}\u0000${id}`).digest('hex')}`;
+  return `notif_v2_${createHash('sha256').update(`${type}\u0000${id}`).digest('hex')}`;
 };
 
 /** @param {string} value */
@@ -88,7 +88,7 @@ const ensureNotificationFanoutQueue = async (db, job) => {
     || !isValidFirebaseKey(job.jobId) || !isValidFirebaseKey(job.queueKey)
     || !Number.isSafeInteger(job.queueVersion) || job.queueVersion < 1) return false;
   await db.ref(`${QUEUE_ROOTS.fanout}/${job.queueKey}`).transaction((current) => current || (
-    buildQueueEntry('fanout', job.jobId, Number(job.availableAtMs || job.createdAtMs), job.queueVersion)
+    buildQueueEntry('fanout', job.jobId, Number(job.availableAtMs || job.createdAtMs), job.queueVersion, job.serviceLane)
   ));
   return true;
 };
@@ -111,6 +111,7 @@ const createNotificationJobRecord = (input) => {
     sourceType,
     sourceId,
     audienceType: boundedString(input?.audienceType, 80),
+    audienceContract: 'indexed_v1',
     tourId,
     categoryKey,
     departureKey,
@@ -123,6 +124,7 @@ const createNotificationJobRecord = (input) => {
       : null,
     status: 'queued',
     priorityClass: policy.retryClass,
+    serviceLane: input.audienceType === 'marketing' ? 'marketing' : policy.retryClass === 'critical' ? 'critical' : 'operational',
     createdAtMs: nowMs,
     sourceOrderMs: Number.isSafeInteger(input?.sourceOrderMs) ? input.sourceOrderMs : nowMs,
     updatedAtMs: nowMs,
@@ -145,7 +147,7 @@ const createNotificationJobRecord = (input) => {
 // eslint-disable-next-line complexity -- idempotency, coalescing and activation form one durable handoff
 const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalescingPublished }) => {
   if (!job || !isValidFirebaseKey(job.jobId)) throw new Error('Invalid notification job');
-  const jobRef = db.ref(`notification_jobs/${job.jobId}`);
+  const jobRef = db.ref(`notification_jobs_v2/${job.jobId}`);
   let created = false;
   const result = await jobRef.transaction((current) => {
     if (current) return;
@@ -157,7 +159,7 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
   let supersededByJobId = null;
   let supersedesJobId = null;
   if (job.coalescingKey) {
-    const stateRef = db.ref(`notification_job_coalescing/${job.coalescingKey}`);
+    const stateRef = db.ref(`notification_job_coalescing_v2/${job.coalescingKey}`);
     // eslint-disable-next-line complexity -- total ordering must handle legacy and current coalescing records
     await stateRef.transaction((current) => {
       const currentOrder = Number(current?.sourceOrderMs || current?.updatedAtMs || 0);
@@ -183,12 +185,12 @@ const enqueueNotificationJob = async ({ db = admin.database(), job, afterCoalesc
     });
     if (afterCoalescingPublished) await afterCoalescingPublished();
     if (supersedesJobId && isValidFirebaseKey(supersedesJobId)) {
-      const previousRef = db.ref(`notification_jobs/${supersedesJobId}`);
+      const previousRef = db.ref(`notification_jobs_v2/${supersedesJobId}`);
       const previous = (await previousRef.once('value')).val();
       if (previous && !isTerminalNotificationJobStatus(previous.status)
         && !isNotificationLifecycleRetentionFenced(previous, job.createdAtMs)) {
         await transitionQueuedRecord(db, {
-          targetPath: `notification_jobs/${supersedesJobId}`,
+          targetPath: `notification_jobs_v2/${supersedesJobId}`,
           current: previous,
           patch: { status: 'expired', supersededByJobId: job.jobId, completedAtMs: Number(previous.completedAtMs || job.createdAtMs), updatedAtMs: job.createdAtMs, lease: null },
           targetId: supersedesJobId,

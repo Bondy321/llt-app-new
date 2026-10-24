@@ -16,7 +16,7 @@ const {
 } = require('../functions/src/domains/account-deletion/accountDeletionCoordination');
 const {
   buildInitialAccountDeletionJob,
-  reserveAccountDeletion,
+  reserveAccountDeletion: productionReserveAccountDeletion,
 } = require('../functions/src/domains/account-deletion/accountDeletionFunctions');
 const { buildNotificationJobId } = require('../functions/src/domains/notifications/notificationJobs');
 const {
@@ -27,6 +27,10 @@ const {
   scrubAccountDeletionMessage,
   scrubChatPage,
 } = require('../functions/src/domains/account-deletion/accountDeletionWorker');
+
+// Unit adapter tests update construction; real SDK admission tests enforce server rules.
+const reserveAccountDeletion = options => productionReserveAccountDeletion({ ...options,
+  createIssuer: ({ db }) => ({ db, close: async () => {} }) });
 
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
 const pathParts = (path = '') => String(path).split('/').filter(Boolean);
@@ -128,6 +132,7 @@ const RECEIPT_A = `delrec_v1_${'3'.repeat(64)}`;
 const RECEIPT_B = `delrec_v1_${'4'.repeat(64)}`;
 
 const reservationFixture = () => ({
+  [`app_session_authority/${AUTH_UID}`]: { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: SESSION_ID },
   [`app_sessions/${AUTH_UID}`]: buildPassengerSessionRecord({
     authUid: AUTH_UID,
     principalId: PASSENGER_ID,
@@ -144,7 +149,7 @@ const reservationFixture = () => ({
     privatePhotoOwnerKey: PASSENGER_ID,
   },
   [`passenger_identity_security/BOOK_CONCURRENT`]: {
-    authorizedAuthUid: AUTH_UID,
+    authorizedAuthUid: AUTH_UID, deviceAuthorizationVersion: 2, authorizedAuthUids: { [AUTH_UID]: true },
     passengerPrincipalId: PASSENGER_ID,
   },
   [`identity_bindings/${PASSENGER_ID}/${AUTH_UID}`]: true,
@@ -355,6 +360,11 @@ const createBucket = ({ failures = {}, missing = [], onDelete = null } = {}) => 
           if (!generations.has(path)) generations.set(path, `generation:${path}`);
           return [{ generation: generations.get(path) }];
         },
+        async save(buffer, options) {
+          assert.equal(buffer.length, 0);
+          assert.ok(options.preconditionOpts);
+          assert.equal(options.metadata.metadata.cancelled, 'true');
+        },
         async delete(options = {}) {
           deletes.push({ path, options });
           if (onDelete) await onDelete(path);
@@ -397,7 +407,15 @@ test('group media removes only trusted owned paths, treats 404 as success, and p
       storagePath: 'group_tour_photos/TOUR_CONCURRENT/foreign.jpg',
     },
   });
-  const bucket = createBucket({ missing: [missingPath] });
+  const baseBucket = createBucket({ missing: [missingPath] });
+  const sentinels = [];
+  const bucket = { ...baseBucket, file(path) {
+    const file = baseBucket.file(path);
+    return { ...file, async save(buffer, options) {
+      await file.save(buffer, options);
+      sentinels.push({ path, size: buffer.length, cancelled: options.metadata.metadata.cancelled });
+    } };
+  } };
   const lease = installLease(db, 'group-success', 'group_media');
   const result = await deleteGroupMediaPage({
     db,
@@ -409,10 +427,14 @@ test('group media removes only trusted owned paths, treats 404 as success, and p
     lease,
   });
   assert.equal(result.recordsRemoved, 1);
-  assert.equal(result.storageObjectsRemoved, 2);
+  assert.equal(result.storageObjectsRemoved, 3);
   assert.equal(db.read('group_tour_photos/TOUR_CONCURRENT/a-owned'), undefined);
   assert.equal(db.read('group_tour_photos/TOUR_CONCURRENT/b-foreign/userId'), 'foreign-user');
   assert.deepEqual(bucket.deletes.map(({ path }) => path), [ownedPath]);
+  assert.deepEqual(sentinels, [
+    { path: missingPath, size: 0, cancelled: 'true' },
+    { path: 'group_tour_photos/TOUR_CONCURRENT/thumbnails/owned_thumb.jpg', size: 0, cancelled: 'true' },
+  ], 'missing metadata still reserves the deterministic derivative target');
 });
 
 test('storage failure leaves metadata and cursor-owning work retryable', async () => {
@@ -491,7 +513,16 @@ test('same-path successor generation returns 412 and preserves bytes and cursor 
   let concurrentReuploadPending = true;
   const bucket = {
     file(path) {
-      assert.equal(path, sharedPath);
+      if (path !== sharedPath) {
+        assert.ok([
+          'group_tour_photos/TOUR_CONCURRENT/viewers/shared-generation_viewer.jpg',
+          'group_tour_photos/TOUR_CONCURRENT/thumbnails/shared-generation_thumb.jpg',
+        ].includes(path));
+        return {
+          async getMetadata() { throw Object.assign(new Error('missing derivative'), { code: 404 }); },
+          async save() { assert.fail('source generation rejection must precede derivative retirement'); },
+        };
+      }
       return {
         async getMetadata() {
           if (!objectExists) {
@@ -653,7 +684,7 @@ test('chat page removes copied reply attribution without deleting the replying m
         previewText: 'private quoted content', idempotencyKey: 'a-passenger',
       },
     },
-    [`notification_jobs/${notificationJobId}`]: {
+    [`notification_jobs_v2/${notificationJobId}`]: {
       jobId: notificationJobId,
       sourceType: 'group_chat_message',
       sourceId: 'TOUR_CONCURRENT:a-passenger',
@@ -666,7 +697,7 @@ test('chat page removes copied reply attribution without deleting the replying m
       queueKind: 'fanout',
       queueKey: 'private-queue-key',
     },
-    'notification_job_fanout_queue/private-queue-key': { targetId: notificationJobId },
+    'notification_job_fanout_queue_v2/private-queue-key': { targetId: notificationJobId },
   });
   const result = await scrubChatPage({
     db,
@@ -682,7 +713,7 @@ test('chat page removes copied reply attribution without deleting the replying m
   assert.equal(db.read('chats/TOUR_CONCURRENT/messages/b-other-reply/text'), 'preserve this reply');
   assert.equal(db.read('chats/TOUR_CONCURRENT/messages/b-other-reply/senderName'), 'Other Passenger');
   assert.equal(db.read('chats/TOUR_CONCURRENT/messages/b-other-reply/replyTo'), undefined);
-  const privacyTombstone = db.read(`notification_jobs/${notificationJobId}`);
+  const privacyTombstone = db.read(`notification_jobs_v2/${notificationJobId}`);
   assert.deepEqual(Object.keys(privacyTombstone).sort(), [
     'completedAtMs', 'createdAtMs', 'expiresAtMs', 'jobId', 'retentionDueAtMs',
     'retentionGeneration', 'schemaVersion', 'status', 'updatedAtMs',
@@ -691,7 +722,7 @@ test('chat page removes copied reply attribution without deleting the replying m
   assert.equal(privacyTombstone.retentionDueAtMs, privacyTombstone.expiresAtMs);
   assert.equal(privacyTombstone.retentionGeneration, 1);
   assert.equal(JSON.stringify(privacyTombstone).includes('Private Passenger'), false);
-  assert.equal(db.read('notification_job_fanout_queue/private-queue-key'), undefined);
+  assert.equal(db.read('notification_job_fanout_queue_v2/private-queue-key'), undefined);
 });
 
 test('chat reply cleanup preserves a concurrently replaced reply context', async () => {
@@ -736,7 +767,7 @@ test('chat scrub waits for a live notification lease before removing authored co
       senderName: 'Private Passenger',
       text: 'must remain until delivery exits',
     },
-    [`notification_jobs/${notificationJobId}`]: {
+    [`notification_jobs_v2/${notificationJobId}`]: {
       jobId: notificationJobId,
       status: 'fanout_in_progress',
       presentation: { title: 'New message', body: 'Private Passenger: must remain until delivery exits' },
@@ -756,7 +787,7 @@ test('chat scrub waits for a live notification lease before removing authored co
     db.read('chats/TOUR_CONCURRENT/messages/leased-message/text'),
     'must remain until delivery exits',
   );
-  assert.equal(db.read(`notification_jobs/${notificationJobId}/status`), 'fanout_in_progress');
+  assert.equal(db.read(`notification_jobs_v2/${notificationJobId}/status`), 'fanout_in_progress');
 });
 
 test('photo notification tombstone uses the producer canonical ID for whitespace-valid photo IDs', async () => {
@@ -773,7 +804,7 @@ test('photo notification tombstone uses the producer canonical ID for whitespace
       senderName: 'Private Passenger',
       text: '',
     },
-    [`notification_jobs/${notificationJobId}`]: {
+    [`notification_jobs_v2/${notificationJobId}`]: {
       jobId: notificationJobId,
       status: 'queued',
       presentation: { title: 'Photo', body: 'Private Passenger: Shared a photo' },
@@ -788,8 +819,8 @@ test('photo notification tombstone uses the producer canonical ID for whitespace
     nowMs: NOW,
     lease: null,
   });
-  assert.equal(db.read(`notification_jobs/${notificationJobId}/status`), 'privacy_deleted');
-  assert.equal(JSON.stringify(db.read(`notification_jobs/${notificationJobId}`)).includes('Private Passenger'), false);
+  assert.equal(db.read(`notification_jobs_v2/${notificationJobId}/status`), 'privacy_deleted');
+  assert.equal(JSON.stringify(db.read(`notification_jobs_v2/${notificationJobId}`)).includes('Private Passenger'), false);
 });
 
 test('stale finalizer cannot overwrite completion or clear successor barriers', async () => {

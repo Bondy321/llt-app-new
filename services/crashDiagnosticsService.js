@@ -29,6 +29,9 @@ let context = {};
 let persistTimer = null;
 let installedGlobalHandler = false;
 let diagnosticsAuthUidOverride;
+let localWriteGeneration = 0;
+let localWritesBlocked = false;
+let localWriteTail = Promise.resolve();
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -222,11 +225,28 @@ const buildSnapshot = (reason = 'snapshot', extra = {}) => {
 };
 
 const persistLocalSnapshot = async (snapshot) => {
+  if (localWritesBlocked) return;
   try {
-    await diagnosticsStorage.setItemAsync(LOCAL_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    const generation = localWriteGeneration;
+    const write = localWriteTail.catch(() => {}).then(() => generation === localWriteGeneration && !localWritesBlocked
+      ? diagnosticsStorage.setItemAsync(LOCAL_SNAPSHOT_KEY, JSON.stringify(snapshot)) : undefined);
+    localWriteTail = write;
+    await write;
   } catch {
     // Diagnostics must never affect app behavior.
   }
+};
+
+export const clearSessionDiagnostics = async () => {
+  localWritesBlocked = true;
+  localWriteGeneration += 1;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  breadcrumbs = [];
+  context = {};
+  diagnosticsAuthUidOverride = null;
+  await localWriteTail.catch(() => {});
+  await diagnosticsStorage.deleteItemAsync(LOCAL_SNAPSHOT_KEY);
 };
 
 const persistRemoteSnapshot = async (snapshot) => {
@@ -267,6 +287,7 @@ const scheduleLocalPersist = () => {
 
 export const setDiagnosticsAuthUid = (authUid, options = {}) => {
   try {
+    if (authUid) localWritesBlocked = false;
     diagnosticsAuthUidOverride = authUid || null;
     context = {
       ...context,
@@ -331,9 +352,12 @@ export const recordBreadcrumb = (component, event, data = {}, options = {}) => {
 };
 
 export const flushDiagnostics = async (reason = 'manual_flush', extra = {}) => {
+  if (localWritesBlocked) return null;
+  const generation = localWriteGeneration;
   try {
     const snapshot = buildSnapshot(reason, extra);
     await persistLocalSnapshot(snapshot);
+    if (generation !== localWriteGeneration || localWritesBlocked) return null;
     await persistRemoteSnapshot(snapshot);
     return snapshot;
   } catch {

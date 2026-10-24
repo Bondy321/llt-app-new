@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import logger from '../../../services/loggerService';
-import { markNotificationRead } from '../../../services/notificationInboxService';
+import { acknowledgeCurrentNotice } from '../../../services/notificationInboxService';
 import { subscribeToNotificationResponses } from '../../../services/notificationService';
 import { createNotificationRegistrationCoordinator } from '../../../services/notifications/notificationRegistrationCoordinator';
 
@@ -30,6 +30,8 @@ export default function useNotificationSessionNavigation({
     && appSession?.tourId === tourId,
   );
   responseContextRef.current = {
+    authUid,
+    appSession,
     activeTourId: hasLiveAppSession ? tourId : null,
     hasAppSession: hasLiveAppSession,
     hasAuth: Boolean(authUid),
@@ -64,11 +66,13 @@ export default function useNotificationSessionNavigation({
         navigate(screen, params);
         if (params?.noticeId && responseTourId) {
           try {
-            await markNotificationRead({ tourId: responseTourId, userId: authUid, noticeId: params.noticeId });
+            await acknowledgeCurrentNotice({ getContext: () => responseContextRef.current,
+              tourId: responseTourId, noticeId: params.noticeId });
           } catch (error) {
             logger.warn('Navigation', 'Notification read state could not be persisted', {
               screen, error: error?.message || String(error),
             });
+            throw error; // The response remains pending and safely retryable.
           }
         }
       },

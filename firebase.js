@@ -15,6 +15,8 @@ import {
   signInAnonymously,
 } from 'firebase/auth';
 import { createPersistenceProvider } from './services/persistenceProvider.js';
+import { initializeFirebaseAppCheck, getFirebaseAppCheckToken } from './services/firebaseAppCheck';
+import { replaceWithFreshAnonymousUser } from './services/freshAnonymousAuth';
 
 // Initialize a resilient persistence layer for auth/session state.
 const authStorage = createPersistenceProvider({ namespace: 'LLT_AUTH' });
@@ -237,6 +239,8 @@ try {
     firebaseDebugLog('Firebase already initialized');
   }
 
+  // Attestation must be installed before any Firebase service is created.
+  initializeFirebaseAppCheck(app._delegate || app);
   // Initialize services
   db = firebase.firestore();
   // Keep one compat app boundary while using modular SDK where RN benefits (storage/realtime typed access).
@@ -385,16 +389,10 @@ const authHelpers = {
     return this.signInAnonymouslyPersistent();
   },
 
-  async replaceWithFreshAnonymous() {
+  async replaceWithFreshAnonymous({ expectedUser = auth?.currentUser, checkBoundary } = {}) {
     assertAuthAvailable('replace authentication for account deletion recovery');
-    await resolveAuthRestoreReady();
-    if (auth.currentUser) {
-      await signOut(auth);
-    }
-    await authPersistence.clearAuthState();
-    const result = await signInAnonymously(auth);
-    await authPersistence.saveAuthState(result.user);
-    return result.user;
+    return replaceWithFreshAnonymousUser({ auth, restoreReady: resolveAuthRestoreReady,
+      signOut, signInAnonymously, persistence: authPersistence, expectedUser, checkBoundary });
   },
 
   onAuthStateChanged(callback) {
@@ -430,13 +428,7 @@ const authHelpers = {
 
 const getCurrentAppCheckToken = async () => {
   try {
-    const appCheckInstance = app?.appCheck?.();
-    if (!appCheckInstance?.getToken) {
-      return null;
-    }
-
-    const result = await appCheckInstance.getToken(false);
-    return typeof result?.token === 'string' ? result.token : null;
+    return await getFirebaseAppCheckToken();
   } catch (error) {
     firebaseWarnLog('Unable to retrieve App Check token:', formatFirebaseError(error));
     throw error;

@@ -27,7 +27,7 @@ const { recordCanaryFinalizationProof } = require('./canaryFixture');
 const { compiledRetentionProtocol } = require('./protocol');
 
 const loadAttemptPage = async ({ context, limit, metrics }) => {
-  const snapshot = await context.db.ref('notification_delivery_attempts').orderByChild('jobId')
+  const snapshot = await context.db.ref('notification_delivery_attempts_v2').orderByChild('jobId')
     .equalTo(context.jobId).limitToFirst(limit + 1).once('value');
   metrics.queries += 1;
   metrics.attemptPagesQueried += 1;
@@ -57,7 +57,7 @@ const buildAttemptDeletionUpdate = async ({ context, attempts, metrics, nowMs })
   let retryPointers = 0;
   let receiptPointers = 0;
   for (const [attemptId, attempt] of attempts) {
-    updates[`notification_delivery_attempts/${attemptId}`] = null;
+    updates[`notification_delivery_attempts_v2/${attemptId}`] = null;
     const root = QUEUE_ROOTS[attempt.queueKind];
     if (root && typeof attempt.queueKey === 'string' && attempt.queueKey) {
       const pointer = (await context.db.ref(`${root}/${attempt.queueKey}`).once('value')).val();
@@ -166,7 +166,7 @@ const processAttemptPage = async ({ context, nowMs, metrics }) => {
 const deleteExpiredRequeueState = async ({ context, nowMs, metrics }) => {
   let active = false;
   let deleted = false;
-  const result = await context.db.ref(`notification_requeue_jobs/${context.jobId}`)
+  const result = await context.db.ref(`notification_requeue_jobs_v2/${context.jobId}`)
     .transaction((current) => {
       if (!current) return current;
       if (current.status === 'processing') {
@@ -202,15 +202,20 @@ const processJobChildren = async ({ context, nowMs, metrics }) => {
     context, nowMs, deleted: requeueDeletion.deleted, metrics,
   }))) return false;
   const updates = {
-    [`notification_job_token_claims/${context.jobId}`]: null,
-    [`notification_job_recipients/${context.jobId}`]: null,
-    [`notification_job_audience_claims/${context.jobId}`]: null,
-    [`notification_delivery_warnings/${context.jobId}`]: null,
+    [`notification_job_token_claims_v2/${context.jobId}`]: null,
+    [`notification_job_recipients_v2/${context.jobId}`]: null,
+    [`notification_job_audience_claims_v2/${context.jobId}`]: null,
+    [`notification_delivery_warnings_v2/${context.jobId}`]: null,
   };
   if (context.job.queueKind === 'fanout' && typeof context.job.queueKey === 'string' && context.job.queueKey) {
     updates[`${QUEUE_ROOTS.fanout}/${context.job.queueKey}`] = null;
     metrics.fanoutPointersDeleted += 1;
   }
+  // Keep compact permanent shard fences. Delayed current-version accounting
+  // transactions must not recreate recipient ledgers after retention.
+  updates[`notification_attempt_accounting_v2/${context.jobId}`] = Object.fromEntries(
+    Array.from({ length: 256 }, (_, shard) => [shard.toString(16).padStart(2, '0'), { retired: true }]),
+  );
   const pathCount = Object.keys(updates).length;
   if (pathCount > context.budgets.maxUpdatePaths) return false;
   await context.db.ref().update(updates);
@@ -258,7 +263,7 @@ const reconcileCoalescing = async ({ context, metrics }) => {
   const key = context.job.coalescingKey;
   if (typeof key !== 'string' || !key) return 0;
   let changed = false;
-  const result = await context.db.ref(`notification_job_coalescing/${key}`)
+  const result = await context.db.ref(`notification_job_coalescing_v2/${key}`)
     .transaction((current) => {
       if (!current) return current;
       if (current.jobId === context.jobId) {
@@ -361,15 +366,15 @@ const verifyNoActiveCanonicalQueue = async ({ context, metrics }) => {
 };
 
 const verifyFinalizationChildren = async ({ context, nowMs, metrics }) => {
-  const attempts = await context.db.ref('notification_delivery_attempts').orderByChild('jobId')
+  const attempts = await context.db.ref('notification_delivery_attempts_v2').orderByChild('jobId')
     .equalTo(context.jobId).limitToFirst(1).once('value');
   metrics.queries += 1;
   if (attempts.exists()) return false;
   for (const root of [
-    'notification_job_token_claims',
-    'notification_job_recipients',
-    'notification_job_audience_claims',
-    'notification_delivery_warnings',
+    'notification_job_token_claims_v2',
+    'notification_job_recipients_v2',
+    'notification_job_audience_claims_v2',
+    'notification_delivery_warnings_v2',
   ]) {
     if (!(await branchEmpty(context.db.ref(`${root}/${context.jobId}`), metrics))) return false;
   }
@@ -381,7 +386,7 @@ const deleteCanonicalJob = async ({ context, metrics }) => {
   if (context.canonicalDeleted) return true;
   let deleted = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    context.db.ref(`notification_jobs/${context.jobId}`), (current) => {
+    context.db.ref(`notification_jobs_v2/${context.jobId}`), (current) => {
     if (!jobMatchesState(current, context.state, context.jobId)
       || !ownsExactFence(current, context.state, context.fenceId)) return undefined;
     deleted = true;

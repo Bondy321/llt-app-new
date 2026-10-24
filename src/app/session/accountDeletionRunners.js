@@ -62,6 +62,7 @@ export const runPurgePendingAccountDeletion = async ({
       bookingData: parseSaved(savedBookingEntry),
       driverOperationalScope,
       requireCompleteScope: true,
+      discardQueuedActions: true,
       tourData: parseSaved(savedTourEntry),
     });
     if (!cleanup.success) return cleanup;

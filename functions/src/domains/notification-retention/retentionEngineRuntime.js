@@ -5,9 +5,9 @@
 const { DEFAULT_RETENTION_BUDGETS } = require('./constants');
 
 const QUEUE_ROOTS = Object.freeze({
-  fanout: 'notification_job_fanout_queue',
-  receipt: 'notification_receipt_due_queue',
-  retry: 'notification_attempt_retry_queue',
+  fanout: 'notification_job_fanout_queue_v2',
+  receipt: 'notification_receipt_due_queue_v2',
+  retry: 'notification_attempt_retry_queue_v2',
 });
 const PHASES = Object.freeze(['attempts', 'job_children', 'source_records', 'finalize', 'completed']);
 const METRIC_NAMES = Object.freeze([

@@ -26,7 +26,7 @@ const parseHost = () => {
 
 let testEnv;
 let dbUrl;
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, [ADMIN_UID, DELEGATED_ADMIN_UID].includes(uid) ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 test.before(async () => {
   const emulator = parseHost();
@@ -110,38 +110,35 @@ test('participants cannot acknowledge, resolve, or rewrite safety ownership', as
   await assertFails(passengerDb.ref(`tours/${TOUR_ID}/safetyAlerts/event-v2`).set(versionedAlert()));
 });
 
-test('backend-shaped versioned safety records remain valid for operations status and delivery updates', async () => {
+test('backend-shaped safety records remain readable to MFA operations admins while updates use the server endpoint', async () => {
   const record = versionedAlert();
-  await assertSucceeds(dbFor(ADMIN_UID).ref().update({
+  await testEnv.withSecurityRulesDisabled(async context => context.database(dbUrl).ref().update({
     [`tours/${TOUR_ID}/safetyAlerts/event-v2`]: record,
     'globalSafetyAlerts/event-v2': {
       ...record,
       tourAlertId: `tours/${TOUR_ID}/safetyAlerts/event-v2`,
     },
   }));
-  await assertSucceeds(dbFor(DELEGATED_ADMIN_UID).ref().update({
-    [`tours/${TOUR_ID}/safetyAlerts/event-v2/status`]: 'acknowledged',
-    [`tours/${TOUR_ID}/safetyAlerts/event-v2/notificationDeliveryStatus`]: 'accepted',
-    'globalSafetyAlerts/event-v2/status': 'acknowledged',
-    'globalSafetyAlerts/event-v2/notificationDeliveryStatus': 'accepted',
-  }));
+  for (const uid of [ADMIN_UID, DELEGATED_ADMIN_UID]) {
+    for (const copy of [`tours/${TOUR_ID}/safetyAlerts/event-v2`, 'globalSafetyAlerts/event-v2']) {
+      await assertSucceeds(dbFor(uid).ref(copy).get());
+      await assertFails(dbFor(uid).ref(`${copy}/status`).set('acknowledged'));
+      await assertFails(dbFor(uid).ref(`${copy}/notificationDeliveryStatus`).set('accepted'));
+    }
+  }
 });
 
-test('delegated and primary operations admins can update both safety copies', async () => {
-  const updates = {
-    [`tours/${TOUR_ID}/safetyAlerts/event-1/status`]: 'acknowledged',
-    [`tours/${TOUR_ID}/safetyAlerts/event-1/statusUpdatedBy`]: 'web-admin',
-    'globalSafetyAlerts/event-1/status': 'acknowledged',
-    'globalSafetyAlerts/event-1/statusUpdatedBy': 'web-admin',
-    [`logs/${PASSENGER_UID}/safety/event-1/status`]: 'acknowledged',
-    [`logs/${PASSENGER_UID}/safety/event-1/statusUpdatedAt`]: '2026-08-12T10:05:00.000Z',
-    [`logs/${PASSENGER_UID}/safety/event-1/statusUpdatedBy`]: 'web-admin',
-  };
-  await assertSucceeds(dbFor(DELEGATED_ADMIN_UID).ref().update(updates));
-  await assertSucceeds(dbFor(ADMIN_UID).ref().update({
-    [`tours/${TOUR_ID}/safetyAlerts/event-1/status`]: 'resolved',
-    'globalSafetyAlerts/event-1/status': 'resolved',
-  }));
+test('even MFA admins cannot bypass server-owned safety transitions through any copy or parent', async () => {
+  const copies = [`tours/${TOUR_ID}/safetyAlerts/event-1`, 'globalSafetyAlerts/event-1', `logs/${PASSENGER_UID}/safety/event-1`];
+  for (const uid of [ADMIN_UID, DELEGATED_ADMIN_UID]) {
+    for (const copy of copies) {
+      await assertFails(dbFor(uid).ref(`${copy}/status`).set('resolved'));
+      await assertFails(dbFor(uid).ref(copy).set({ ...pendingAlert(), status: 'resolved' }));
+      await assertFails(dbFor(uid).ref(copy).remove());
+    }
+    await assertFails(dbFor(uid).ref('globalSafetyAlerts').set({ injected: pendingAlert() }));
+    await assertFails(dbFor(uid).ref(`logs/${PASSENGER_UID}/safety`).set({ injected: pendingAlert() }));
+  }
 });
 
 test('outsiders cannot create or update safety records', async () => {

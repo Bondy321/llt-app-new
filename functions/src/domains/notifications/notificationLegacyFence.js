@@ -52,7 +52,7 @@ const legacyFenceId = (jobId, job, authorization) => `legacy_retention_fence_v2_
 const legacyRolloutAuthorized = async ({ db, authorization }) => {
   const [rollout, rawSnapshot] = await Promise.all([
     readNotificationRetentionRollout({ db }),
-    db.ref('notification_retention_rollout/v1').once('value'),
+    db.ref('notification_retention_rollout/v2').once('value'),
   ]);
   const rawFingerprint = createHash('sha256')
     .update(JSON.stringify(rawSnapshot.val() ?? null)).digest('hex');
@@ -65,7 +65,7 @@ const legacyRolloutAuthorized = async ({ db, authorization }) => {
 };
 
 const releaseLegacyFence = async ({ db, jobId, fenced }) => {
-  await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  await db.ref(`notification_jobs_v2/${jobId}`).transaction((current) => {
     if (!current || current.retentionFence?.fenceId !== fenced.retentionFence.fenceId
       || current.retentionFence?.leaseOwnerId !== fenced.retentionFence.leaseOwnerId
       || Number(current.retentionFence?.leaseRevision)
@@ -82,7 +82,7 @@ const renewLegacyFence = async ({
   db, jobId, fenced, nowMs, leaseMs = DEFAULT_RETENTION_BUDGETS.leaseMs,
 }) => {
   let renewed = null;
-  const result = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const result = await db.ref(`notification_jobs_v2/${jobId}`).transaction((current) => {
     if (!current || current.retentionFence?.fenceId !== fenced.retentionFence.fenceId
       || current.retentionFence?.leaseOwnerId !== fenced.retentionFence.leaseOwnerId
       || Number(current.retentionFence?.leaseRevision)
@@ -134,11 +134,11 @@ const fenceLegacyJob = async ({
   });
   const candidate = recovered || expected;
   if (!(await legacyRolloutAuthorized({ db, authorization }))) return null;
-  const requeue = (await db.ref(`notification_requeue_jobs/${jobId}`).once('value')).val();
+  const requeue = (await db.ref(`notification_requeue_jobs_v2/${jobId}`).once('value')).val();
   const activeRequeue = Boolean(requeue?.status === 'processing');
   const fenceId = legacyFenceId(jobId, candidate, authorization);
   let fenced = null;
-  const result = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const result = await db.ref(`notification_jobs_v2/${jobId}`).transaction((current) => {
     if (!legacyJobIdentityMatches(current, candidate, jobId)) return undefined;
     if (current.retentionFence?.fenceId === fenceId
       && current.retentionFence.status === 'active') {
@@ -189,7 +189,7 @@ const deleteFencedLegacyJob = async ({ db, jobId, fenced, authorization }) => {
     return false;
   }
   let deleted = false;
-  const result = await db.ref(`notification_jobs/${jobId}`).transaction((current) => {
+  const result = await db.ref(`notification_jobs_v2/${jobId}`).transaction((current) => {
     if (!current || current.retentionFence?.fenceId !== fenced.retentionFence.fenceId
       || current.retentionFence.status !== 'active'
       || current.retentionFence.leaseOwnerId !== fenced.retentionFence.leaseOwnerId

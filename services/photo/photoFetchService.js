@@ -1,3 +1,4 @@
+const { boundedNetworkDecision } = require('../boundedNetworkDecision');
 const {
   buildPagedPhotoResult,
   databaseRef,
@@ -6,6 +7,7 @@ const {
   limitToLast,
   logPhotoDbEvent,
   mapSnapshotToPhotos,
+  isVisiblePhotoRecord,
   normalizeCursor,
   orderByChild,
   query,
@@ -31,6 +33,7 @@ const fetchTourPhotosPage = async (
     limitToLastFn = limitToLast,
     endAtFn = endAt,
     getFn = get,
+    readTimeoutMs = 15000,
     resolveGroupPhotoMediaFn = resolveGroupPhotoMedia,
   } = {},
 ) => {
@@ -43,7 +46,9 @@ const fetchTourPhotosPage = async (
   if (cursor) {
     constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
   }
-  constraints.push(limitToLastFn(safeLimit + 1));
+  // endAt is inclusive: reserve a slot for both the cursor and the unseen
+  // sentinel. Without it, every noninitial full page falsely reports exhaustion.
+  constraints.push(limitToLastFn(safeLimit + (cursor ? 2 : 1)));
 
   logPhotoDbEvent('debug', 'photo_page_fetch_start', {
     visibility: 'group',
@@ -57,7 +62,7 @@ const fetchTourPhotosPage = async (
         }
       : null,
   });
-  const snapshot = await getFn(queryFn(baseRef, ...constraints));
+  const snapshot = await boundedNetworkDecision(() => getFn(queryFn(baseRef, ...constraints)), readTimeoutMs);
   const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
     if (!cursor) {
       return true;
@@ -66,6 +71,9 @@ const fetchTourPhotosPage = async (
   });
 
   const result = buildPagedPhotoResult(photos, safeLimit);
+  // Cursor/hasMore describe scanned rows, including hidden operations. Filtering
+  // before pagination would falsely exhaust a page containing pending records.
+  result.items = result.items.filter(isVisiblePhotoRecord);
   result.items = await resolveGroupPhotoMediaFn({ tourId: validatedTourId, photos: result.items });
   logPhotoDbEvent('debug', 'photo_page_fetch_success', {
     visibility: 'group',
@@ -110,6 +118,7 @@ const fetchPrivatePhotosPage = async (
     limitToLastFn = limitToLast,
     endAtFn = endAt,
     getFn = get,
+    readTimeoutMs = 15000,
     resolvePrivatePhotoMediaFn = resolvePrivatePhotoMedia,
   } = {},
 ) => {
@@ -124,7 +133,7 @@ const fetchPrivatePhotosPage = async (
   if (cursor) {
     constraints.push(endAtFn(cursor.timestamp, cursor.id || undefined));
   }
-  constraints.push(limitToLastFn(safeLimit + 1));
+  constraints.push(limitToLastFn(safeLimit + (cursor ? 2 : 1)));
 
   logPhotoDbEvent('debug', 'photo_page_fetch_start', {
     visibility: 'private',
@@ -140,7 +149,7 @@ const fetchPrivatePhotosPage = async (
         }
       : null,
   });
-  const snapshot = await getFn(queryFn(baseRef, ...constraints));
+  const snapshot = await boundedNetworkDecision(() => getFn(queryFn(baseRef, ...constraints)), readTimeoutMs);
   const photos = mapSnapshotToPhotos(snapshot).filter((photo) => {
     if (!cursor) {
       return true;
@@ -149,6 +158,9 @@ const fetchPrivatePhotosPage = async (
   });
 
   const result = buildPagedPhotoResult(photos, safeLimit);
+  // Cursor/hasMore describe scanned rows, including hidden operations. Filtering
+  // before pagination would falsely exhaust a page containing pending records.
+  result.items = result.items.filter(isVisiblePhotoRecord);
   result.items = await resolvePrivatePhotoMediaFn({
     tourId: validatedTourId,
     ownerKey: validatedOwnerKey,

@@ -12,7 +12,7 @@ const { acquireManualBookingLock, releaseManualBookingLock } = require('../../in
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { checkRateLimit, getRequestClientKey, hashRateLimitDimension } = require('../../infrastructure/rate-limit/requestRateLimiter');
+const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { verifyOperationsAdminAccess } = require('../administration/public');
 const {
@@ -148,13 +148,12 @@ const assignDriverToTour = onRequestWithResult(
     if (!requestAuth.success) return reject(res, 401, 'INVALID_CREDENTIALS');
 
     const db = admin.database();
-    const isAdmin = await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db });
+    const isAdmin = await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db, claims: requestAuth.claims, requireSecondFactor: true });
     const input = parseDriverAssignmentInput(req.body, isAdmin);
     if (!input) return reject(res, 400, 'INVALID_INPUT');
     if (!isAdmin && input.operation !== 'assign') return reject(res, 403, 'NOT_AUTHORIZED');
 
-    const clientKey = getRequestClientKey(req);
-    if (!checkRateLimit(`assign_driver_${requestAuth.uid}_${hashRateLimitDimension(clientKey)}`, isAdmin ? 60 : 12, 60000)) {
+    if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'driver_assignment', maxRequests: isAdmin ? 60 : 12, db }))) {
       return reject(res, 429, 'TRY_AGAIN_LATER');
     }
 

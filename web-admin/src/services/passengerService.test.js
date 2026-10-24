@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getIdTokenMock = vi.fn();
 
 vi.mock('../firebase', () => ({
+  getAdminAppCheckToken: async () => 'synthetic-app-check',
   auth: {
     currentUser: {
       getIdToken: getIdTokenMock,
@@ -151,6 +152,7 @@ describe('passengerService manual booking validation', () => {
         method: 'POST',
         headers: {
           Authorization: 'Bearer token-123',
+          'X-Firebase-AppCheck': 'synthetic-app-check',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({

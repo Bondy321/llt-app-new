@@ -4016,7 +4016,6 @@ const CONTRACTS = Object.freeze({
         "phase": {
           "type": "string",
           "enum": [
-            "compatibility",
             "server_only"
           ]
         },
@@ -4031,7 +4030,6 @@ const CONTRACTS = Object.freeze({
       },
       "enumValues": {
         "phase": [
-          "compatibility",
           "server_only"
         ]
       },
@@ -4073,7 +4071,6 @@ const CONTRACTS = Object.freeze({
         "phase": {
           "type": "string",
           "enum": [
-            "compatibility",
             "cutover"
           ]
         },
@@ -4088,7 +4085,6 @@ const CONTRACTS = Object.freeze({
       },
       "enumValues": {
         "phase": [
-          "compatibility",
           "cutover"
         ]
       },

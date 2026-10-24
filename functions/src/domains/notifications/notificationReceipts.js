@@ -3,13 +3,15 @@
 // @ts-check
 
 const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
+const { recordNotificationQueueHealth } = require('./notificationQueueHealth');
+const { resumeAttemptPublication } = require('./notificationAttemptPublication');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { expoAccessTokenSecret, getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
 const { calculateRetryDelayMs } = require('./notificationJobs');
 const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
 const { evaluateAudienceCandidate, hashPushToken } = require('./notificationAudiencePage');
-const { QUEUE_ROOTS, claimQueueEntry, loadDueQueueEntries, releaseClaimedQueueEntry,
+const { QUEUE_ROOTS, claimQueueEntry, loadFairDueQueueEntries, releaseClaimedQueueEntry,
   removeClaimedQueueEntry } = require('./notificationQueues');
 const { markSubmissionUnknown, retryNotificationDeliveryAttempt, transitionDeliveryAttempt } = require('./notificationWorker');
 const { syncNotificationSourceStatus } = require('./notificationSourceStatus');
@@ -88,7 +90,7 @@ const resolveJobStatus = (job) => {
 
 /** Current-state status refresh is O(1): transition helpers maintain job counters. */
 const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
-  const jobRef = db.ref(`notification_jobs/${jobId}`);
+  const jobRef = db.ref(`notification_jobs_v2/${jobId}`);
   const result = await transactExistingRecord(jobRef, (job) => {
     if (job.status === 'privacy_deleted' || isNotificationLifecycleRetentionFenced(job, nowMs)) {
       return job;
@@ -109,7 +111,7 @@ const refreshNotificationJobStatus = async (db, jobId, nowMs) => {
   }
   await syncNotificationSourceStatus(db, updated, nowMs);
   if (updated.priorityClass === 'critical' && ['provider_rejected', 'partial', 'submission_unknown'].includes(updated.status)) {
-    await db.ref(`notification_delivery_warnings/${jobId}`).update({ jobId, tourId: updated.tourId || null, eventId: updated.eventId || null, severity: 'critical', code: updated.status.toUpperCase(), status: 'open', updatedAtMs: nowMs });
+    await db.ref(`notification_delivery_warnings_v2/${jobId}`).update({ jobId, tourId: updated.tourId || null, eventId: updated.eventId || null, severity: 'critical', code: updated.status.toUpperCase(), status: 'open', updatedAtMs: nowMs });
   }
   if (schedulingError) throw schedulingError;
   return { status: updated.status, counts: updated.counts || {}, job: updated };
@@ -135,26 +137,27 @@ const processReceipt = async (db, attemptId, attempt, receipt, nowMs) => {
   const retryable = TEMPORARY_RECEIPT_ERRORS.has(code) && Number(attempt.receiptWindowExpiresAtMs || 0) > nowMs;
   await transitionDeliveryAttempt(db, attemptId, attempt, { status: retryable ? 'retrying' : 'provider_rejected', receiptStatus: 'provider_rejected', retryable, availableAtMs: retryable ? nowMs + calculateRetryDelayMs(Number(attempt.attemptNumber || 1)) : nowMs, receiptDueAtMs: null, safeErrorCode: code }, nowMs);
   if (code === 'DeviceNotRegistered') await compareAndClearTokenByHash(db, attempt, code, nowMs);
-  if (CONFIGURATION_RECEIPT_ERRORS.has(code)) await db.ref(`notification_delivery_warnings/${attempt.jobId}`).update({ jobId: attempt.jobId, severity: 'critical', code, status: 'open', updatedAtMs: nowMs });
+  if (CONFIGURATION_RECEIPT_ERRORS.has(code)) await db.ref(`notification_delivery_warnings_v2/${attempt.jobId}`).update({ jobId: attempt.jobId, severity: 'critical', code, status: 'open', updatedAtMs: nowMs });
   return 'rejected';
 };
 
-/** @param {{ db?: any, nowMs?: number, expo?: any }} options */
+/** @param {{ db?: any, nowMs?: number, expo?: any, providerClock?: () => number }} options */
 // eslint-disable-next-line complexity -- queue validation and receipt outcomes are a single bounded batch
 const processDueNotificationReceipts = async ({ db = admin.database(), nowMs = Date.now(), expo = getExpoPushClient() } = {}) => {
-  const queue = await loadDueQueueEntries(db, 'receipt', nowMs, RECEIPT_BATCH_LIMIT);
+  const queue = await loadFairDueQueueEntries(db, 'receipt', nowMs, RECEIPT_BATCH_LIMIT);
   const due = [];
   const observedJobs = new Map();
   for (const [queueKey, entry] of queue) {
     const claimed = await claimQueueEntry(db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), nowMs);
     if (!claimed.claimed) continue;
-    const attempt = (await db.ref(`notification_delivery_attempts/${entry.targetId}`).once('value')).val();
+    let attempt = (await db.ref(`notification_delivery_attempts_v2/${entry.targetId}`).once('value')).val();
+    if (attempt?.publicationPending) attempt = await resumeAttemptPublication(db, attempt);
     if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version) || attempt.receiptStatus !== 'receipt_pending' || typeof attempt.ticketId !== 'string') {
       await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.receipt}/${queueKey}`), claimed.ownerId);
       continue;
     }
     if (!observedJobs.has(attempt.jobId)) {
-      observedJobs.set(attempt.jobId, (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val());
+      observedJobs.set(attempt.jobId, (await db.ref(`notification_jobs_v2/${attempt.jobId}`).once('value')).val());
     }
     if (isNotificationLifecycleRetentionFenced(observedJobs.get(attempt.jobId), nowMs)) {
       await releaseClaimedQueueEntry(
@@ -180,19 +183,20 @@ const processDueNotificationReceipts = async ({ db = admin.database(), nowMs = D
 
 const isRetryAttemptExpired = (job, nowMs) => !job || Number(job.expiresAtMs || 0) <= nowMs || job.supersededByJobId;
 
-/** @param {{ db?: any, nowMs?: number, expo?: any }} options */
+/** @param {{ db?: any, nowMs?: number, expo?: any, providerClock?: () => number }} options */
 // eslint-disable-next-line complexity -- retry ownership is intentionally fail-closed at every authority boundary
-const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Date.now(), expo = getExpoPushClient() } = {}) => {
-  const queue = await loadDueQueueEntries(db, 'retry', nowMs, 100);
+const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Date.now(), expo = getExpoPushClient(), providerClock = Date.now } = {}) => {
+  const queue = await loadFairDueQueueEntries(db, 'retry', nowMs, 300);
   let retried = 0; let scanned = 0;
   for (const [queueKey, entry] of queue) {
     const claimedQueue = await claimQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), nowMs);
     if (!claimedQueue.claimed) continue;
     const attemptId = entry.targetId;
-    const attempt = (await db.ref(`notification_delivery_attempts/${attemptId}`).once('value')).val();
+    let attempt = (await db.ref(`notification_delivery_attempts_v2/${attemptId}`).once('value')).val();
+    if (attempt?.publicationPending) attempt = await resumeAttemptPublication(db, attempt);
     if (!attempt || attempt.queueKey !== queueKey || Number(attempt.queueVersion) !== Number(entry.version)) { await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId); continue; }
     scanned += 1;
-    const job = (await db.ref(`notification_jobs/${attempt.jobId}`).once('value')).val();
+    const job = (await db.ref(`notification_jobs_v2/${attempt.jobId}`).once('value')).val();
     if (isNotificationLifecycleRetentionFenced(job, nowMs)) {
       await releaseClaimedQueueEntry(
         db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId, nowMs + STALE_SENDING_ATTEMPT_MS,
@@ -200,13 +204,13 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
       continue;
     }
     if (attempt.status === 'request_started') {
-      await markSubmissionUnknown(db, job || { jobId: attempt.jobId, priorityClass: 'standard' }, { attemptRef: db.ref(`notification_delivery_attempts/${attemptId}`), attemptId, attempt }, nowMs, new Error('Stale submission lease'));
+      await markSubmissionUnknown(db, job || { jobId: attempt.jobId, priorityClass: 'standard' }, { attemptRef: db.ref(`notification_delivery_attempts_v2/${attemptId}`), attemptId, attempt }, nowMs, new Error('Stale submission lease'));
       await refreshNotificationJobStatus(db, attempt.jobId, nowMs);
       continue;
     }
     if (attempt.status === 'prepared') {
       await transitionDeliveryAttempt(db, attemptId, attempt, { status: 'retrying', retryable: true, availableAtMs: nowMs, submissionLease: null, safeErrorCode: 'PRE_REQUEST_RECOVERY' }, nowMs);
-      Object.assign(attempt, (await db.ref(`notification_delivery_attempts/${attemptId}`).once('value')).val() || {});
+      Object.assign(attempt, (await db.ref(`notification_delivery_attempts_v2/${attemptId}`).once('value')).val() || {});
     }
     if (attempt.status !== 'retrying') {
       await removeClaimedQueueEntry(db.ref(`${QUEUE_ROOTS.retry}/${queueKey}`), claimedQueue.ownerId);
@@ -214,7 +218,7 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
     }
     if (isRetryAttemptExpired(job, nowMs) || Number(attempt.attemptNumber || 0) >= Number(job?.maxAttempts || 8)) {
       await transitionDeliveryAttempt(db, attemptId, attempt, { status: 'provider_rejected', receiptStatus: 'provider_rejected', retryable: false, safeErrorCode: isRetryAttemptExpired(job, nowMs) ? 'JOB_EXPIRED' : 'MAX_ATTEMPTS_REACHED' }, nowMs);
-      if (job?.priorityClass === 'critical') await db.ref(`notification_delivery_warnings/${attempt.jobId}`).update({ jobId: attempt.jobId, severity: 'critical', code: isRetryAttemptExpired(job, nowMs) ? 'JOB_EXPIRED' : 'MAX_ATTEMPTS_REACHED', status: 'open', updatedAtMs: nowMs });
+      if (job?.priorityClass === 'critical') await db.ref(`notification_delivery_warnings_v2/${attempt.jobId}`).update({ jobId: attempt.jobId, severity: 'critical', code: isRetryAttemptExpired(job, nowMs) ? 'JOB_EXPIRED' : 'MAX_ATTEMPTS_REACHED', status: 'open', updatedAtMs: nowMs });
       await refreshNotificationJobStatus(db, attempt.jobId, nowMs);
       continue;
     }
@@ -226,7 +230,7 @@ const retryDueNotificationAttempts = async ({ db = admin.database(), nowMs = Dat
       await refreshNotificationJobStatus(db, attempt.jobId, nowMs);
       continue;
     }
-    const retry = await retryNotificationDeliveryAttempt({ db, job, attemptId, attempt, recipient, nowMs, expo });
+    const retry = await retryNotificationDeliveryAttempt({ db, job, attemptId, attempt, recipient, nowMs, expo, providerClock });
     if (retry.success) retried += 1;
     await refreshNotificationJobStatus(db, attempt.jobId, nowMs);
   }
@@ -241,7 +245,10 @@ const cleanupOldNotificationDeliveryData = async () => {
   return { deleted: 0, rolloutChanged: false, failClosed: true };
 };
 
-const processNotificationReceipts = onSchedule({ schedule: 'every 15 minutes', timeZone: 'Europe/London', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 1 }, async () => ({ receipts: await processDueNotificationReceipts(), retries: await retryDueNotificationAttempts() }));
+const processNotificationReceipts = onSchedule({ schedule: 'every 1 minutes', timeZone: 'Europe/London', region: 'europe-west1', secrets: [expoAccessTokenSecret], maxInstances: 1, concurrency: 1, timeoutSeconds: 300 }, async () => {
+  await recordNotificationQueueHealth(admin.database());
+  return { receipts: await processDueNotificationReceipts(), retries: await retryDueNotificationAttempts() };
+});
 const cleanupNotificationDeliveryData = onSchedule({
   schedule: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.schedule,
   timeZone: RETENTION_ENGINE_PROTOCOL_MANIFEST.trigger.timeZone,

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { withApprovedStaffSessions } = require('./helpers/approvedStaffFixtures');
 const { hasCurrentDriverAuthority } = require('../functions/lib/driverLocationProjection');
 const { cleanupExpiredDriverLocations } = require('../functions/lib/driverLocationExpiryCleanup');
 const {
@@ -13,7 +14,7 @@ const { buildDriverSessionRecord } = require('../functions/lib/appSession');
 const { cleanupLiveStateForSession } = require('../functions/lib/appSessionCleanup');
 
 function createMockDatabase(initialState, { beforeTransaction, coldTransactionPaths = [] } = {}) {
-  const state = structuredClone(initialState);
+  const state = withApprovedStaffSessions(initialState);
   const parts = (path) => String(path || '').split('/').filter(Boolean);
   const read = (path) => parts(path).reduce((node, part) => node?.[part], state);
   const write = (path, value) => {
@@ -102,11 +103,11 @@ test('tracked authority requires exact active unexpired intent; legacy sources r
 
 test('server driver authority excludes tracked sources even when the entire current assignment remains valid', async () => {
   const initial = { ...state(),
-    app_sessions: { 'uid-a': { sessionId: SID, authUid: 'uid-a', status: 'active', principalType: 'driver',
+    app_sessions: { 'uid-a': { schemaVersion: 1, sessionId: SID, authUid: 'uid-a', status: 'active', principalType: 'driver',
       principalId: 'driver:D-A', driverId: 'D-A', tourId: 'tour_a', expiresAtMs: 2000, driverLoginPolicyGeneration: 0 } },
-    users: { 'uid-a': { principalType: 'driver', driverId: 'D-A', driverAssignedTourId: 'tour_a' } },
-    driver_login_policy: { v1: { schemaVersion: 1, enforceSingleDevice: false, generation: 0 } },
-    drivers: { 'D-A': { authUid: 'uid-a' } },
+    users: { 'uid-a': { principalType: 'driver', driverId: 'D-A', driverPrincipalId: 'driver:D-A', driverAssignedTourId: 'tour_a' } },
+    driver_login_policy: { v1: { schemaVersion: 1, enforceSingleDevice: false, generation: 0, revision: 1, updatedAtMs: 1 } },
+    drivers: { 'D-A': { authUid: 'uid-a', currentTourId: 'tour_a' } },
     tour_manifests: { tour_a: { assigned_drivers: { 'D-A': true } } },
   };
   const database = createMockDatabase(initial);
@@ -114,6 +115,22 @@ test('server driver authority excludes tracked sources even when the entire curr
   database.state.driver_tracking_sessions[sourceKey].status = 'stopped';
   assert.equal(await hasCurrentDriverAuthority(database, source(), 1000), false);
   assert.equal(await hasCurrentDriverAuthority(database, source({ liveSharingSessionId: 'loc_legacy' }), 1000), true);
+});
+
+test('projection denies stale profile/manifest remnants after assignment, policy or staff authority changes', async () => {
+  const initial = { ...stopAuthorityState(), ...state() };
+  for (const mutate of [
+    value => { value.drivers['D-A'].currentTourId = 'tour_b'; },
+    value => { value.driver_assignment_active = { v1: { 'D-A': false } }; },
+    value => { value.driver_login_policy.v1.transitionPhase = 'draining'; },
+    value => { value.driver_staff_policy['D-A'].generation = 'e'.repeat(48); },
+    value => { value.driver_login_policy.v1.enforceSingleDevice = true; value.drivers['D-A'].authUidStaffGeneration = 'e'.repeat(48); },
+  ]) {
+    const db = createMockDatabase(initial);
+    assert.equal(await hasCurrentDriverAuthority(db, source(), 1000), true);
+    mutate(db.state);
+    assert.equal(await hasCurrentDriverAuthority(db, source(), 1000), false);
+  }
 });
 
 test('a stopped event removes only its owned live leaf and keeps the tombstone and other handset', async () => {
@@ -177,7 +194,7 @@ const STOP_NOW = 100_000;
 const stopIntent = (overrides = {}) => intent({ status: 'stopped', startedAtMs: 1000, expiresAtMs: 200_000, ...overrides });
 const stopAuthorityState = () => ({
   app_sessions: { 'uid-a': buildDriverSessionRecord({ authUid: 'uid-a', sessionId: SID, driverId: 'D-A',
-    tourId: 'tour_a', nowMs: 1000, expiresAtMs: 200_000 }) },
+    tourId: 'tour_a', driverLoginPolicyGeneration: 0, nowMs: 1000, expiresAtMs: 200_000 }) },
   users: { 'uid-a': { principalType: 'driver', driverId: 'D-A', driverPrincipalId: 'driver:D-A', driverAssignedTourId: 'tour_a' } },
   drivers: { 'D-A': { authUid: 'uid-a', currentTourId: 'tour_a' } },
   tour_manifests: { tour_a: { assigned_drivers: { 'D-A': true } } },
@@ -404,7 +421,7 @@ test('captured driver session cleanup retires its exact intent before source rem
   initial.users['uid-a'].principalType = 'passenger';
   initial.users['uid-a'].driverId = null;
   initial.app_sessions['uid-b'] = buildDriverSessionRecord({ authUid: 'uid-b', sessionId: otherSid,
-    driverId: 'D-A', tourId: 'tour_a', nowMs: 1000, expiresAtMs: 200_000 });
+    driverId: 'D-A', tourId: 'tour_a', driverLoginPolicyGeneration: 0, nowMs: 1000, expiresAtMs: 200_000 });
   initial.users['uid-b'] = { principalType: 'driver', driverId: 'D-A', driverPrincipalId: 'driver:D-A', driverAssignedTourId: 'tour_a' };
   initial.driver_tracking_sessions = { [sourceKey]: stopIntent({ status: 'active' }),
     [otherKey]: stopIntent({ status: 'active', authUid: 'uid-b', appSessionId: otherSid, liveSharingSessionId: otherLive }) };

@@ -195,7 +195,7 @@ const updateDriverLocationPickup = onRequestWithResult(
       return res.status(503).json({ success: false, reason: 'LIVE_STATE_ROLLOUT_INVALID' });
     }
     if (!isLiveStateClientSupported({ rollout, clientVersion: input.clientVersion })) {
-      return res.status(426).json({ success: false, reason: 'UPDATE_REQUIRED', minimumSupportedVersion: '1.0.5' });
+      return res.status(426).json({ success: false, reason: 'UPDATE_REQUIRED', minimumSupportedVersion: '1.1.0' });
     }
     const result = await performPickupMutation({ db, input, requestAuth });
     return res.status(result.status).json(result.payload);

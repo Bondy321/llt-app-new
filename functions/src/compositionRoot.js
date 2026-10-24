@@ -1,12 +1,14 @@
 'use strict';
 
 const administration = require('./domains/administration/administrationFunctions');
+const { mutateTour } = require('./domains/administration/tourMutationFunction');
 const adminDashboard = require('./domains/admin-dashboard/dashboardProjectionFunctions');
 const coachTracking = require('./domains/admin-dashboard/coachTrackingFunctions');
 const accountDeletion = require('./domains/account-deletion/accountDeletionFunctions');
 const sessions = require('./domains/app-sessions/sessionFunctions');
 const roleTransitionClaims = require('./domains/app-sessions/roleTransitionClaimFunctions');
 const assignment = require('./domains/driver-assignment/driverAssignmentFunction');
+const staffEnrolment = require('./domains/driver-auth/staffEnrolmentFunctions');
 const driverAuth = require('./domains/driver-auth/driverLoginFunction');
 const driverDevicePolicy = require('./domains/driver-auth/driverDevicePolicyFunctions');
 const driverTourPacks = require('./domains/driver-tour-packs/ingestionFunction');
@@ -20,6 +22,7 @@ const manifests = require('./domains/manifests/manifestFunction');
 const groupMedia = require('./domains/media/groupMediaFunctions');
 const photoVariants = require('./domains/media/photoVariantFunction');
 const privateMedia = require('./domains/media/privateMediaFunctions');
+const mediaUploadCleanup = require('./domains/media/mediaUploadCleanup');
 const broadcasts = require('./domains/notifications/broadcastFunctions');
 const chatNotifications = require('./domains/notifications/chatNotificationFunctions');
 const driverTourPackNotifications = require('./domains/notifications/driverTourPackNotificationFunction');
@@ -37,6 +40,7 @@ const safety = require('./domains/safety/safetyFunction');
 const testableRegistry = require('./testableRegistry');
 
 module.exports = {
+  staffDeviceEnrolment: staffEnrolment.staffDeviceEnrolment,
   getPassengerTripSnapshot: passengerTrip.getPassengerTripSnapshot,
   projectPassengerTripBooking: passengerTrip.projectPassengerTripBooking,
   projectPassengerTripItinerary: passengerTrip.projectPassengerTripItinerary,
@@ -97,11 +101,13 @@ module.exports = {
   cleanupExpiredDriverLocations: scheduledCleanup.cleanupExpiredDriverLocations,
   cleanupExpiredDriverTourPacks: scheduledCleanup.cleanupExpiredDriverTourPacks,
   cleanupExpiredLoginRateLimits: scheduledCleanup.cleanupExpiredLoginRateLimits,
+  cleanupPendingMediaUploads: mediaUploadCleanup.cleanupPendingMediaUploads,
   cleanupDriverLoginPolicySessions: driverDevicePolicy.cleanupDriverLoginPolicySessions,
   cleanupNotificationReadState: notificationReads.cleanupNotificationReadState,
   cleanupNotificationDeliveryData: notificationReceipts.cleanupNotificationDeliveryData,
   createGroupPhotoChatMessage: groupMedia.createGroupPhotoChatMessage,
   createManualPassengerBooking: administration.createManualPassengerBooking,
+  mutateTour,
   deleteGroupPhoto: groupMedia.deleteGroupPhoto,
   deletePrivatePhoto: privateMedia.deletePrivatePhoto,
   deleteTourData: administration.deleteTourData,

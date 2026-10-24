@@ -54,7 +54,7 @@ const LOGIN_MODE_HINTS = {
   },
   driver: {
     label: 'Driver',
-    hint: 'Use your driver code starting with D- (for example D-BONDY).',
+    hint: 'Use your D- ID and a one-time device enrolment code from dispatch.',
     placeholder: 'Driver code (for example D-BONDY)',
   },
 };

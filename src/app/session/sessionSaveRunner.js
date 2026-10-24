@@ -2,7 +2,7 @@ import { classifySessionTransition } from '../../../services/appSessionTransitio
 
 // Identity/authentication seed storage remains separate from the current display
 // envelope. Navigation must never write captured trip projections back to disk.
-export const runSaveSessionProjection = async ({ SESSION_KEYS, SessionStorage, logger,
+export const runSaveSessionProjection = async ({ SESSION_KEYS, logger,
   tourData, bookingData, currentScreen, identityBinding, passengerTripActive,
   appSession, appSessionService, appSessionRef }, overrides = {}) => {
   try {
@@ -26,8 +26,11 @@ export const runSaveSessionProjection = async ({ SESSION_KEYS, SessionStorage, l
       return await appSessionService.persistProjection({ expectedSession: expected, entries: sessionEntries,
         isCurrent: () => classifySessionTransition(expected, appSessionRef.current) === 'duplicate' });
     }
-    await SessionStorage.multiSet(sessionEntries);
-    return true;
+    if (expected?.principalType !== 'passenger'
+      || projectedBooking?.stablePassengerId !== expected.principalId
+      || projectedTour?.id !== expected.tourId) return false;
+    return await appSessionService.persistProjection({ expectedSession: expected, entries: sessionEntries,
+      isCurrent: () => classifySessionTransition(expected, appSessionRef.current) === 'duplicate' });
   } catch (error) {
     logger.error('Session', 'Failed to save session', { error: error.message });
     return false;

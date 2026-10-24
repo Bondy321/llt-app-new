@@ -1,7 +1,10 @@
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { auth, db } from './firebase';
-import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import { signInWithEmailAndPassword, onAuthStateChanged, signOut, sendPasswordResetEmail, getMultiFactorResolver, TotpMultiFactorGenerator } from 'firebase/auth';
+import AdminMfaSetup from './components/AdminMfaSetup';
+import { hasAdminSecondFactor } from './services/adminMfaService';
+import { boundedRequest } from './services/boundedRequest';
 import {
   getRuntimeDebugContext,
   logFirebaseDebug,
@@ -72,13 +75,15 @@ function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [mfaResolver, setMfaResolver] = useState(null);
+  const [mfaCode, setMfaCode] = useState('');
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!email || !password) {
+    if (!mfaResolver && (!email || !password)) {
       notifications.show({
         title: 'Missing Information',
         message: 'Please enter both email and password',
@@ -94,12 +99,22 @@ function LoginPage() {
     });
 
     try {
-      const credential = await signInWithEmailAndPassword(auth, email, password);
+      const hint = mfaResolver?.hints.find(item => item.factorId === TotpMultiFactorGenerator.FACTOR_ID);
+      if (mfaResolver && !hint) throw new Error('An authenticator factor is required for this admin account.');
+      const credential = mfaResolver
+        ? await mfaResolver.resolveSignIn(TotpMultiFactorGenerator.assertionForSignIn(hint.uid, mfaCode))
+        : await signInWithEmailAndPassword(auth, email, password);
+      setPassword(''); setMfaCode(''); setMfaResolver(null);
       loginTimer.success({
         user: summarizeAuthUser(credential.user),
         operationType: credential.operationType || null,
       });
     } catch (err) {
+      if (err.code === 'auth/multi-factor-auth-required') {
+        setMfaResolver(getMultiFactorResolver(auth, err));
+        setPassword('');
+        return;
+      }
       loginTimer.failure(err, {
         email: maskDebugEmail(email),
       });
@@ -208,13 +223,15 @@ function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 leftSection={<IconUser size={16} />}
                 required
+                disabled={Boolean(mfaResolver)}
               />
               <PasswordInput
                 label="Password"
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                required
+                required={!mfaResolver}
+                disabled={Boolean(mfaResolver)}
               />
               <Button
                 type="submit"
@@ -224,8 +241,12 @@ function LoginPage() {
                 gradient={{ from: 'brand', to: 'cyan' }}
                 size="md"
               >
-                Sign In
+                {mfaResolver ? 'Verify authenticator' : 'Sign In'}
               </Button>
+              {mfaResolver && <>
+                <TextInput label="Authenticator code" value={mfaCode} onChange={event => setMfaCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={6} required />
+                <Button variant="subtle" onClick={() => { setMfaResolver(null); setMfaCode(''); setPassword(''); }}>Start again</Button>
+              </>}
             </Stack>
           </form>
 
@@ -423,6 +444,7 @@ function AppLayout({ user }) {
 // Main App Component
 function App() {
   const [user, setUser] = useState(null);
+  const [secondFactorVerified, setSecondFactorVerified] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -432,7 +454,11 @@ function App() {
     }, 'info');
 
     let active = true;
+    let generation = 0;
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      const attempt = ++generation;
+      const current = () => active && generation === attempt && auth.currentUser?.uid === user?.uid;
+      setSecondFactorVerified(false);
       logFirebaseDebug('auth:state-listener:changed', {
         user: summarizeAuthUser(user),
         runtime: getRuntimeDebugContext(),
@@ -445,8 +471,10 @@ function App() {
         return;
       }
 
-      const isAdmin = await hasOperationsAdminAccess(db, user);
-      if (!active) return;
+      try {
+      setLoading(true);
+      const isAdmin = await boundedRequest(() => hasOperationsAdminAccess(db, user));
+      if (!current()) return;
       if (!isAdmin) {
         setUser(null);
         setLoading(false);
@@ -459,8 +487,17 @@ function App() {
         return;
       }
 
+      const tokenResult = await boundedRequest(() => user.getIdTokenResult());
+      if (!current()) return;
+      setSecondFactorVerified(hasAdminSecondFactor(tokenResult.claims));
       setUser(user);
       setLoading(false);
+      } catch {
+        if (!current()) return;
+        setUser(null); setLoading(false);
+        notifications.show({ title: 'Access check unavailable', message: 'Your admin access could not be verified. Check your connection and sign in again.', color: 'red' });
+        await signOut(auth).catch(() => undefined);
+      }
     }, (error) => {
       logFirebaseDebug('auth:state-listener:error', {
         error,
@@ -496,6 +533,7 @@ function App() {
   }
 
   // Show main app
+  if (!secondFactorVerified) return <AdminMfaSetup />;
   return <AppLayout user={user} />;
 }
 

@@ -2,6 +2,10 @@
 
 // @ts-check
 
+const { retireVariantObject, buildPhotoVariantPaths } = require('./mediaVariantStorage');
+const { performMediaUpload, assertMediaUploadSettled, mediaUploadFailureResponse } = require('./mediaUploadOperation');
+const { validateDecodedImage } = require('./mediaImageValidation');
+const { signCurrentMedia } = require('./mediaOperationBoundary');
 const { onRequest } = require('firebase-functions/v2/https');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
@@ -17,7 +21,6 @@ const {
   signPrivateMediaRecords,
 } = require('./mediaAccess');
 const {
-  extensionForGroupPhotoContentType,
   normalizeGroupPhotoUploadMetadata,
 } = require('./mediaUploadMetadata');
 const {
@@ -33,7 +36,6 @@ const {
 } = require('../../infrastructure/validation/stringNormalization');
 const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 
-const PRIVATE_PHOTO_CACHE_CONTROL_HEADER = 'private,no-store';
 const onRequestWithResult = /** @type {any} */ (onRequest);
 
 const deletePrivateStorageObjectIgnoringMissing = async (bucket, path, expectedGeneration) => {
@@ -79,14 +81,17 @@ const deleteOwnedPrivatePhotoRecordUnlocked = async ({
   const snapshot = await recordRef.once('value');
   if (!snapshot.exists()) return { deleted: false, alreadyDeleted: true, storageObjectsRemoved: 0 };
   const observed = snapshot.val() || {};
+  await assertMediaUploadSettled({ db, record: observed });
   if (!owners.has(observed.userId) || observed.userId !== ownerKey) {
     return { deleted: false, alreadyDeleted: false, reason: 'NOT_OWNER' };
   }
+  const derived = typeof observed.storagePath === 'string'
+    ? buildPhotoVariantPaths({ visibility: 'private', tourId, ownerKey: ownerKey, filename: observed.storagePath.split('/').pop() }) : {};
   const captured = {
     userId: observed.userId,
     storagePath: observed.storagePath ?? null,
-    viewerStoragePath: observed.viewerStoragePath ?? null,
-    thumbnailStoragePath: observed.thumbnailStoragePath ?? null,
+    viewerStoragePath: observed.viewerStoragePath ?? derived.viewerPath ?? null,
+    thumbnailStoragePath: observed.thumbnailStoragePath ?? derived.thumbnailPath ?? null,
   };
   const capturedPaths = [captured.storagePath, captured.viewerStoragePath, captured.thumbnailStoragePath];
   if (capturedPaths.some((path) => path !== null
@@ -151,7 +156,9 @@ const deleteOwnedPrivatePhotoRecordUnlocked = async ({
     if (assertCanDelete) await assertCanDelete();
     const field = ['storagePath', 'viewerStoragePath', 'thumbnailStoragePath']
       .find((candidate) => captured[candidate] === path);
-    await deletePrivateStorageObjectIgnoringMissing(bucket, path, generations[field]);
+    if (field === 'storagePath') await deletePrivateStorageObjectIgnoringMissing(bucket, path, generations[field]);
+    else await retireVariantObject({ bucket, path, expectedGeneration: generations[field], sourcePath: captured.storagePath,
+      sourceGeneration: generations.storagePath, sourceRole: field === 'viewerStoragePath' ? 'viewer' : 'thumbnail', visibility: 'private' });
   }
   if (assertCanDelete) await assertCanDelete();
   let matched = false;
@@ -208,6 +215,10 @@ const resolvePrivatePhotoMedia = onRequestWithResult(
     if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
     const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
     if (!requestAuth) return null;
+    const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+    if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'private_media', maxRequests: 120 }))) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
     const input = normalizePrivateMediaRequest(req.body);
     if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     const access = await verifyActiveAppSession({
@@ -223,8 +234,14 @@ const resolvePrivatePhotoMedia = onRequestWithResult(
     if (Object.keys(records).length === 0) return res.status(404).json({ success: false, reason: 'NOT_FOUND' });
     const bucket = admin.storage().bucket();
     const expires = Date.now() + PRIVATE_MEDIA_URL_TTL_MS;
-    const media = await signPrivateMediaRecords({ bucket, input, records, expires });
-    return res.status(200).json({ success: true, expiresAtMs: expires, media });
+    const signed = await signCurrentMedia({ access, records,
+      readAccess: () => verifyActiveAppSession({ db: admin.database(), authUid: requestAuth.uid,
+        expectedTourId: input.tourId, expectedRole: 'passenger' }),
+      readRecords: () => readPrivateMediaRecords({ db: admin.database(), ...input }),
+      sign: current => signPrivateMediaRecords({ bucket, input, records: current, expires }),
+    });
+    if (!signed.allowed) return res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' });
+    return res.status(200).json({ success: true, expiresAtMs: expires, media: signed.media });
   },
 );
 
@@ -234,49 +251,9 @@ const normalizePrivatePhotoUploadMetadata = (rawHeader) => {
   return input ? { ...input, uploaderName: undefined } : null;
 };
 
-/** @type {(...args: any[]) => Promise<any>} */
-const reservePrivatePhotoRecord = async ({ db, input, principalId, contentType, fileSize, nowMs = Date.now() }) => {
-  const photoId = toRealtimeKeySegment(input.idempotencyKey);
-  const extension = extensionForGroupPhotoContentType(contentType);
-  const storagePath = `private_tour_photos/${input.tourId}/${principalId}/${photoId}.${extension}`;
-  const recordRef = db.ref(`private_tour_photos/${input.tourId}/${principalId}/${photoId}`);
-  let conflict = false;
-  let deduped = false;
-  const result = await recordRef.transaction(/** @param {any} current */ (current) => {
-    if (current) {
-      if (current._serverDeletion?.status === 'deleting') {
-        conflict = true;
-        return undefined;
-      }
-      if (current.idempotencyKey === input.idempotencyKey && current.userId === principalId
-        && current.storagePath === storagePath) {
-        deduped = true;
-        return current;
-      }
-      conflict = true;
-      return undefined;
-    }
-    return {
-      userId: principalId,
-      caption: input.caption,
-      timestamp: nowMs,
-      storagePath,
-      fileSize,
-      fileType: contentType,
-      idempotencyKey: input.idempotencyKey,
-      variantStatus: 'processing',
-      variantUpdatedAt: nowMs,
-      variantError: null,
-      variantVersion: 2,
-    };
-  });
-  if (conflict || !result.committed) return { success: false, reason: 'IDEMPOTENCY_CONFLICT' };
-  return { success: true, photoId, storagePath, deduped, recordRef };
-};
-
 /** @type {(...args: any[]) => any} */
 const uploadPrivatePhoto = onRequestWithResult(
-  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', cors: true },
+  { region: 'europe-west1', maxInstances: 20, timeoutSeconds: 60, memory: '512MiB', concurrency: 2, cors: true },
   async (/** @type {any} */ req, /** @type {any} */ res) => {
     res.set('Cache-Control', 'private,no-store');
     if (req.method !== 'POST') return res.status(405).json({ success: false, reason: 'METHOD_NOT_ALLOWED' });
@@ -284,6 +261,10 @@ const uploadPrivatePhoto = onRequestWithResult(
     if (!input) return res.status(400).json({ success: false, reason: 'INVALID_INPUT' });
     const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
     if (!requestAuth) return null;
+    const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+    if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'private_media', maxRequests: 120 }))) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
     const access = await verifyActiveAppSession({
       db: admin.database(),
       authUid: requestAuth.uid,
@@ -297,6 +278,8 @@ const uploadPrivatePhoto = onRequestWithResult(
       || !GROUP_MEDIA_ALLOWED_TYPES.has(contentType)) {
       return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' });
     }
+    try { await validateDecodedImage(body, contentType); }
+    catch { return res.status(400).json({ success: false, reason: 'INVALID_IMAGE' }); }
     const db = admin.database();
     const photoId = toRealtimeKeySegment(input.idempotencyKey);
     const mutationLock = await acquireMediaRecordLock({
@@ -310,25 +293,10 @@ const uploadPrivatePhoto = onRequestWithResult(
       return res.status(409).json({ success: false, reason: 'MEDIA_MUTATION_IN_PROGRESS' });
     }
     try {
-      const reservation = await reservePrivatePhotoRecord({
-        db,
-        input,
-        principalId: access.principalId,
-        contentType,
-        fileSize: body.length,
+      const reservation = await performMediaUpload({ db, bucket: admin.storage().bucket(), input,
+        access: access, authUid: requestAuth.uid, visibility: 'private', body, contentType,
+        lockOwner: mutationLock.owner, readAccess: () => verifyActiveAppSession({ db, authUid: requestAuth.uid, expectedTourId: input.tourId, expectedRole: 'passenger' }),
       });
-      if (!reservation.success) return res.status(409).json({ success: false, reason: reservation.reason });
-      const file = admin.storage().bucket().file(reservation.storagePath);
-      if (!reservation.deduped || !(await file.exists())[0]) {
-        await file.save(body, {
-          resumable: false,
-          metadata: {
-            contentType,
-            cacheControl: PRIVATE_PHOTO_CACHE_CONTROL_HEADER,
-            metadata: { visibility: 'private', sourceRole: 'source' },
-          },
-        });
-      }
       return res.status(200).json({
         success: true,
         photo: {
@@ -339,6 +307,9 @@ const uploadPrivatePhoto = onRequestWithResult(
           deduped: reservation.deduped,
         },
       });
+    } catch (error) {
+      const { status, reason } = mediaUploadFailureResponse(error);
+      return res.status(status).json({ success: false, reason });
     } finally {
       await releaseMediaRecordLock(mutationLock);
     }
@@ -358,6 +329,10 @@ const deletePrivatePhoto = onRequestWithResult(
     }
     const requestAuth = await authorizeAppSessionMobileRequest({ req, res });
     if (!requestAuth) return null;
+    const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+    if (!(await checkDistributedRequestLimit({ req, authUid: requestAuth.uid, action: 'private_media', maxRequests: 120 }))) {
+      return res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' });
+    }
     const access = await verifyActiveAppSession({
       db: admin.database(),
       authUid: requestAuth.uid,
@@ -390,7 +365,6 @@ module.exports = {
   deletePrivatePhoto,
   deleteOwnedPrivatePhotoRecord,
   normalizePrivatePhotoUploadMetadata,
-  reservePrivatePhotoRecord,
   resolvePrivatePhotoMedia,
   uploadPrivatePhoto,
 };

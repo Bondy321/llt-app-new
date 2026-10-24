@@ -14,9 +14,6 @@ const isAuthUid = value => isValidFirebaseKey(value) && value.length <= 128 && v
 // explicitly withdrawn device. Readers can fetch just the version and own leaf.
 const isPassengerDeviceAuthorized = (identity, authUid) => {
   if (!isRecord(identity) || !isAuthUid(authUid) || identity.loginLocked === true) return false;
-  if (identity.deviceAuthorizationVersion === undefined || identity.deviceAuthorizationVersion === null) {
-    return identity.authorizedAuthUid === authUid;
-  }
   return identity.deviceAuthorizationVersion === PASSENGER_DEVICE_AUTHORIZATION_VERSION
     && isRecord(identity.authorizedAuthUids) && identity.authorizedAuthUids[authUid] === true;
 };
@@ -111,17 +108,14 @@ const authorizePassengerLoginDevice = async ({ securityRef, authUid } = {}) => {
     if (version === PASSENGER_DEVICE_AUTHORIZATION_VERSION && current.authorizedAuthUids?.[authUid] === true
       && current.passengerIdentityVersion === PASSENGER_IDENTITY_VERSION) return current;
     const devices = version === PASSENGER_DEVICE_AUTHORIZATION_VERSION ? current.authorizedAuthUids || {} : {};
-    const legacyUid = isAuthUid(current.authorizedAuthUid) ? current.authorizedAuthUid : null;
     return {
       ...current,
       passengerIdentityVersion: PASSENGER_IDENTITY_VERSION,
       deviceAuthorizationVersion: PASSENGER_DEVICE_AUTHORIZATION_VERSION,
       authorizedAuthUids: {
         ...devices,
-        ...(version !== PASSENGER_DEVICE_AUTHORIZATION_VERSION && legacyUid ? { [legacyUid]: true } : {}),
         [authUid]: true,
       },
-      ...(!legacyUid ? { authorizedAuthUid: authUid } : {}),
       ...(current.loginDeviceBoundAtMs === undefined ? { loginDeviceBoundAtMs: Date.now() } : {}),
     };
   }, undefined, false);

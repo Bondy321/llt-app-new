@@ -3,6 +3,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import logger from '../../../services/loggerService';
 import { isTestRuntime } from '../../shared/config/runtimeEnvironment';
+import { guardedLocalSessionWrite, serializeLocalSessionWrite } from '../../../services/localSessionWriteBoundary';
 
 export const SESSION_KEYS = Object.freeze({
   TOUR_DATA: '@LLT:tourData',
@@ -28,7 +29,12 @@ const createMemoryStorage = () => {
 export const createSessionStorage = () => {
   try {
     if (AsyncStorage?.multiGet && AsyncStorage?.multiSet && AsyncStorage?.multiRemove) {
-      return { storage: AsyncStorage, mode: 'async-storage', enabled: true };
+      return { storage: {
+        ...AsyncStorage,
+        multiSet: entries => guardedLocalSessionWrite(AsyncStorage, () => AsyncStorage.multiSet(entries)),
+        setItem: (key, value) => guardedLocalSessionWrite(AsyncStorage, () => AsyncStorage.setItem(key, value)),
+        multiRemove: keys => serializeLocalSessionWrite(AsyncStorage, () => AsyncStorage.multiRemove(keys)),
+      }, mode: 'async-storage', enabled: true };
     }
   } catch (error) {
     logger.warn('SessionStorage', 'AsyncStorage unavailable, falling back to mock', {

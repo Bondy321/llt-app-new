@@ -55,7 +55,7 @@ test('allows authenticated users to write only below their own log branch', asyn
 });
 
 test('keeps operations-admin log access intact', async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID).database(dbUrl);
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { firebase: { sign_in_second_factor: 'totp' } }).database(dbUrl);
   await assertSucceeds(adminDb.ref(`logs/${OTHER_UID}/session/event`).set({ message: 'admin diagnostic' }));
   await assertSucceeds(adminDb.ref(`logs/${OTHER_UID}/session/event`).once('value'));
 });

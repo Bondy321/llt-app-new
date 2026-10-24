@@ -65,6 +65,8 @@ const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appS
 const { isValidAppSessionId } = loadLegacyLibrary('appSession');
 const { cleanupExpiredOperationsTerminalWarnings } = loadLegacyLibrary('operationsTerminalWarnings');
 
+const { captureInstallationAuthority, prepareDeletionPublication, commitDeletionPublication } = loadLegacyLibrary('sessionPublicationAuthority');
+
 const REQUEST_LOCK_TTL_MS = 180 * 1000;
 const JOB_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -99,7 +101,7 @@ const readAccountDeletionStatusRecord = async ({ db, deletionId }) => {
 const readValidatedAccountDeletionRollout = async (db) => {
   const value = (await db.ref(ACCOUNT_DELETION_ROLLOUT_PATH).once('value')).val();
   if (value !== null && value !== undefined && !validateAccountDeletionRolloutRecord(value).valid) {
-    return { valid: false, isDefault: false, phase: 'compatibility' };
+    return { valid: false, isDefault: false, phase: null };
   }
   return normalizeAccountDeletionRollout(value);
 };
@@ -183,9 +185,21 @@ const buildInitialAccountDeletionJob = ({ deletionId, privateScope, nowMs }) => 
 });
 
 // eslint-disable-next-line complexity -- reservation deliberately keeps the lock/commit failure paths together
-const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = Date.now() }) => {
+const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = Date.now(), createIssuer }) => {
   const expectedSessionId = input?.expectedSessionId;
   if (!isValidAppSessionId(expectedSessionId)) return { status: 400, reason: 'INVALID_INPUT' };
+  const pendingIntent = (await db.ref(`app_session_authority/${authUid}`).once('value')).val();
+  if (pendingIntent?.state === 'deletion_prepared') {
+    if (pendingIntent.deletionId !== deletionId || pendingIntent.sessionId !== expectedSessionId) {
+      return { status: 409, reason: 'ACCOUNT_DELETION_IN_PROGRESS' };
+    }
+    const job = await commitDeletionPublication({ db, authUid, authority: pendingIntent, createIssuer });
+    return { status: 202, job, replay: true };
+  }
+  // Completed receipts are resolved below without trying to create authority.
+  const capturedAuthority = pendingIntent?.state === 'deleted'
+    ? { epoch: pendingIntent.epoch, value: pendingIntent }
+    : await captureInstallationAuthority({ db, authUid });
   const owner = randomUUID();
   let reservationLock = null;
   let sessionLock = null;
@@ -304,7 +318,7 @@ const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = 
       actorType: scope.session.principalType,
       nowMs,
     });
-    await db.ref().update({
+    const reservationUpdates = {
       ...cleanupUpdates,
       [`${ACCOUNT_DELETION_JOB_ROOT}/${deletionId}`]: job,
       [`${ACCOUNT_DELETION_QUEUE_ROOT}/${deletionId}`]: {
@@ -335,7 +349,10 @@ const reserveAccountDeletion = async ({ db, authUid, input, deletionId, nowMs = 
         },
       } : {}),
       [`app_session_events/${eventId}`]: { ...event, tourId: null, driverId: null },
-    });
+    };
+    const authority = await prepareDeletionPublication({ db, authUid, expectedSessionId, deletionId, job,
+      updates: reservationUpdates, lockOwner: sessionLock.owner, capturedAuthority, nowMs });
+    await commitDeletionPublication({ db, authUid, authority, createIssuer });
     return { status: 202, job, replay: false };
   } finally {
     if (passengerDeletionLock?.acquired) {
@@ -481,17 +498,37 @@ const retryAccountDeletion = onRequest({
   return res.status(200).json(projectValidatedStatusResponse(result.job));
 });
 
+const readAccountDeletionHealth = async ({ db, outcomes, nowMs = Date.now() }) => {
+  const oldest = (await db.ref(ACCOUNT_DELETION_QUEUE_ROOT)
+    .orderByChild('dueAtMs').limitToFirst(1).once('value')).val();
+  const dueAtMs = Object.values(oldest || {})[0]?.dueAtMs;
+  return {
+    event: 'account_deletion_queue_health',
+    oldestDueAgeMs: Number.isSafeInteger(dueAtMs) ? Math.max(0, nowMs - dueAtMs) : 0,
+    hasQueuedWork: Boolean(oldest && Object.keys(oldest).length),
+    phaseAdvances: outcomes.filter(outcome => outcome.phaseAdvanced === true).length,
+    succeeded: outcomes.filter(outcome => outcome.completed === true).length,
+    failed: outcomes.filter(outcome => outcome.errorCode).length,
+  };
+};
+
 const processAccountDeletionJobs = onSchedule({
   schedule: 'every 5 minutes',
   timeZone: 'Europe/London',
   region: 'europe-west1',
   maxInstances: 1,
   timeoutSeconds: 300,
-}, async () => ({
-  processed: await processDueAccountDeletionJobs(),
-  completedRemoved: await cleanupCompletedAccountDeletionJobs(),
-  terminalWarningsRemoved: await cleanupExpiredOperationsTerminalWarnings({ db: admin.database() }),
-}));
+}, async () => {
+  const db = admin.database();
+  const outcomes = await processDueAccountDeletionJobs({ db });
+  const health = await readAccountDeletionHealth({ db, outcomes });
+  require('firebase-functions/logger').info('Account deletion queue health', health);
+  return {
+    ...health,
+    completedRemoved: await cleanupCompletedAccountDeletionJobs(),
+    terminalWarningsRemoved: await cleanupExpiredOperationsTerminalWarnings({ db }),
+  };
+});
 
 module.exports = {
   acquireAccountDeletionReservationLock,
@@ -503,6 +540,7 @@ module.exports = {
   projectValidatedStatusResponse,
   readValidatedAccountDeletionRollout,
   readAccountDeletionStatusRecord,
+  readAccountDeletionHealth,
   requestAccountDeletion,
   reserveAccountDeletion,
   retryAccountDeletion,

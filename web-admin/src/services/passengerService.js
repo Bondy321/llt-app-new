@@ -1,3 +1,4 @@
+import { adminHttpRequest } from './adminHttpRequest';
 import { auth } from '../firebase';
 import {
   formatDateToUK,
@@ -201,16 +202,7 @@ export const createManualPassengerBooking = async (draft, tours = {}) => {
     throw new Error('Your admin session has expired. Sign in again and retry.');
   }
 
-  const token = await auth.currentUser.getIdToken();
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(validation.normalized),
-  });
-  const payload = await response.json().catch(() => null);
+  const { response, payload } = await adminHttpRequest(endpoint, validation.normalized);
   if (!response.ok || !payload?.success) {
     const reason = payload?.reason || 'INTERNAL_ERROR';
     const error = new Error(REASON_MESSAGES[reason] || REASON_MESSAGES.INTERNAL_ERROR);

@@ -25,11 +25,11 @@ const inspectRetentionRules = (rules) => {
   const indexed = (name, field) => Array.isArray(ruleRoots[name]?.['.indexOn'])
     && ruleRoots[name]['.indexOn'].includes(field);
   return {
-    retentionJobIndexPresent: indexed('notification_jobs', 'retentionDueAtMs'),
-    retentionAttemptIndexPresent: indexed('notification_delivery_attempts', 'retentionDueAtMs'),
-    retentionAttemptUpdatedIndexPresent: indexed('notification_delivery_attempts', 'updatedAtMs'),
+    retentionJobIndexPresent: indexed('notification_jobs_v2', 'retentionDueAtMs'),
+    retentionAttemptIndexPresent: indexed('notification_delivery_attempts_v2', 'retentionDueAtMs'),
+    retentionAttemptUpdatedIndexPresent: indexed('notification_delivery_attempts_v2', 'updatedAtMs'),
     retentionMarketingIndexPresent: indexed('marketing_notification_details', 'retentionDueAtMs'),
-    requeueRecoveryIndexPresent: indexed('notification_requeue_jobs', 'recoveryDueAtMs'),
+    requeueRecoveryIndexPresent: indexed('notification_requeue_jobs_v2', 'recoveryDueAtMs'),
     retentionRootPrivate: privateRoot('notification_retention'),
     retentionStateDueIndexPresent: Array.isArray(
       ruleRoots.notification_retention?.v1?.jobs?.['.indexOn'],

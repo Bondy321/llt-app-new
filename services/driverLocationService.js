@@ -1,7 +1,6 @@
 import { normalizeTourId } from './tourIdentityService.js';
 import {
   buildDriverLocationSessionKey,
-  buildDriverLocationSourcePayload,
 } from '../utils/driverLocation.js';
 
 // Serialize only the exact private leaf. Separate installations/sharing sessions
@@ -44,29 +43,6 @@ const removeLiveSource = async (locationRef) => {
     // delete on this retired leaf is harmless; do not report a false failure.
   }
   return { success: true, removed: true, withdrawalAcknowledged: true, disconnectCancelled };
-};
-
-const skippedLivePublication = async (locationRef, reason) => {
-  try {
-    const cleanup = await removeLiveSource(locationRef);
-    return { success: false, skipped: true, reason, withdrawalAcknowledged: cleanup.withdrawalAcknowledged };
-  } catch {
-    return { success: false, skipped: true, reason, withdrawalAcknowledged: false, cleanupPending: true };
-  }
-};
-
-const estimatePublicationTime = async (dbInstance, now) => {
-  let offset = null;
-  try {
-    // Built-in connection metadata is readable; private location sources are not.
-    const snapshot = await dbInstance.ref('.info/serverTimeOffset').once('value');
-    const value = snapshot?.val?.();
-    if (typeof value === 'number' && Number.isFinite(value)) offset = value;
-  } catch { /* A clock estimate is still available when metadata cannot be read. */ }
-  return {
-    timestamp: Math.trunc(now() + (offset ?? 0)),
-    timestampSource: offset === null ? 'client_estimate' : 'server_estimate',
-  };
 };
 
 export const createDriverLocationSessionId = (now = Date.now, random = Math.random) => (
@@ -121,11 +97,11 @@ export const publishDriverLocation = async ({
   location,
   source = 'manual',
   address,
-  updatedBy,
+  updatedBy: _updatedBy,
   dbInstance,
   now = Date.now,
   isScopeCurrent = () => true,
-  sessionId,
+  sessionId: _sessionId,
   sessionScope,
   appSessionId,
   authUid,
@@ -166,44 +142,7 @@ export const publishDriverLocation = async ({
       storedLocation,
     };
   }
-  const { locationRef, sessionKey } = resolveLiveLocationRef({
-    appSessionId: ownership.appSessionId, liveSharingSessionId: sessionId, dbInstance,
-  });
-  return runLiveOperation(dbInstance, sessionKey, async (state) => {
-    if (state.withdrawalRequested || !isScopeCurrent()) {
-      return { success: false, skipped: true, reason: 'DRIVER_LOCATION_SCOPE_REVOKED' };
-    }
-    // Validate before arming any remote operation; refresh the lease after waits.
-    buildDriverLocationSourcePayload({ ...location, source, address, updatedBy,
-      liveSharingSessionId: sessionId, ...ownership, nowMs: now() });
-    const disconnectHandler = locationRef.onDisconnect?.();
-    if (typeof disconnectHandler?.remove !== 'function') throw new Error('Realtime disconnect cleanup is unavailable');
-    await disconnectHandler.remove();
-    if (state.withdrawalRequested || !isScopeCurrent()) {
-      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_BEFORE_WRITE');
-    }
-    const estimate = await estimatePublicationTime(dbInstance, now);
-    if (state.withdrawalRequested || !isScopeCurrent()) {
-      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_BEFORE_WRITE');
-    }
-    const payload = buildDriverLocationSourcePayload({ ...location, source, address, updatedBy,
-      liveSharingSessionId: sessionId, ...ownership, nowMs: estimate.timestamp });
-    try {
-      await locationRef.set(payload);
-    } catch (error) {
-      // A rejected write is rolled back by Firebase. Preserve an earlier good
-      // publication and its disconnect cleanup unless the scope was stopped.
-      if (state.withdrawalRequested || !isScopeCurrent()) {
-        await skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
-      }
-      throw error;
-    }
-    if (state.withdrawalRequested || !isScopeCurrent()) {
-      return skippedLivePublication(locationRef, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
-    }
-    return { success: true, ...payload, sessionKey, timestamp: estimate.timestamp,
-      timestampSource: estimate.timestampSource, publicationAcknowledged: true, storedLocation: null };
-  });
+  throw Object.assign(new Error('Start an explicit tracking session to share a live location.'), { code: 'EXPLICIT_TRACKING_REQUIRED' });
 };
 
 export const withdrawDriverLocation = async ({ tourId, sessionScope, pickupMutation }) => {

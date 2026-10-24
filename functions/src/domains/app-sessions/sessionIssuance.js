@@ -26,6 +26,8 @@ const {
   cleanupLiveStateForSession,
 } = loadLegacyLibrary('appSessionCleanup');
 
+const { captureInstallationAuthority, prepareSessionPublication, commitSessionPublication } = loadLegacyLibrary('sessionPublicationAuthority');
+
 const VERIFIED_LOGIN_GRANT_TTL_MS = 30 * 60 * 1000;
 const APP_SESSION_ISSUANCE_LOCK_TTL_MS = 3 * 60 * 1000;
 
@@ -91,8 +93,11 @@ const issuePassengerAppSession = async ({
   clock = Date.now,
   existingAppSessionLock = null,
   existingPassengerDeletionLock = null,
+  capturedAuthority = null,
+  createIssuer,
   // eslint-disable-next-line complexity -- issuance coordinates two renewable locks and one atomic authority write
 }) => {
+  capturedAuthority ||= await captureInstallationAuthority({ db, authUid });
   const ownsAppSessionLock = !existingAppSessionLock;
   const lock = existingAppSessionLock || await acquireAppSessionLock({
     db, authUid, operation: 'issue', nowMs: clock(), clock, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
@@ -195,7 +200,9 @@ const issuePassengerAppSession = async ({
       operation: 'issue', expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS,
       sessionId: session.sessionId, sessionRevision: session.sessionRevision };
     assertFreshIssuanceDispatch({ clock, expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS });
-    await db.ref().update(updates);
+    const authority = await prepareSessionPublication({ db, authUid, capturedAuthority, session, updates,
+      previousSessionId: existingSession?.sessionId || null, nowMs: finalCommitNowMs });
+    await commitSessionPublication({ db, authUid, authority, session, updates, createIssuer });
     committed = true;
     return session;
   } finally {
@@ -213,17 +220,58 @@ const issuePassengerAppSession = async ({
   }
 };
 
+const recoverStaffPublication = async ({ db, authUid, capturedAuthority, staffAuthorization, lock, clock, createIssuer }) => {
+  const recovery = capturedAuthority.value;
+  if (recovery?.staff?.redemptionId !== staffAuthorization.redemptionId
+    || !['prepared', 'committed'].includes(recovery.state)) return null;
+  if (recovery.state === 'prepared') {
+    const { session, updatesJson } = recovery.publication || {};
+    if (!session || session.sessionId !== recovery.sessionId || typeof updatesJson !== 'string') {
+      throw new Error('Incomplete staff publication receipt');
+    }
+    const updates = JSON.parse(updatesJson);
+    updates[`app_session_locks/${authUid}`] = { ...lock.lock, owner: lock.owner,
+      operation: 'issue', expiresAtMs: clock() + APP_SESSION_ISSUANCE_LOCK_TTL_MS,
+      sessionId: session.sessionId, sessionRevision: session.sessionRevision };
+    const resumed = await prepareSessionPublication({ db, authUid, capturedAuthority,
+      session, updates, staff: staffAuthorization,
+      previousSessionId: recovery.previousSessionId || null, nowMs: clock() });
+    await commitSessionPublication({ db, authUid, authority: resumed, session, updates, createIssuer });
+  }
+  const canonical = (await db.ref(`app_sessions/${authUid}`).once('value')).val();
+  const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
+  if (!canonical || canonical.sessionId !== recovery.sessionId
+    || !(await verifyActiveAppSession({ db, authUid, expectedRole: 'driver',
+      expectedSessionId: recovery.sessionId, allowUnassignedDriver: true,
+      driverLoginAdmission: staffAuthorization, nowMs: clock() })).allowed) {
+    throw Object.assign(new Error('Staff recovery superseded'), { code: 'SESSION_CHANGED' });
+  }
+  return canonical;
+};
+
+const buildPreviousSessionCleanup = ({ existingSession, userSnapshot, notificationDeviceSnapshot, nowMs }) => (
+  existingSession?.sessionId ? buildAppSessionCleanupUpdates({
+    session: existingSession, userProfile: userSnapshot.val() || {},
+    notificationDevice: notificationDeviceSnapshot.val() || null, nowMs,
+  }) : {}
+);
+
 /** @type {(...args: any[]) => Promise<any>} */
 const issueDriverAppSession = async ({
   db,
   authUid,
   driverId,
   tourId,
-  driverLoginPolicyGeneration = 0,
+  driverLoginPolicyGeneration,
+  staffAuthorization,
+  capturedAuthority = null,
+  createIssuer,
   profileUpdates,
   nowMs = Date.now(),
   clock = Date.now,
 }) => {
+  capturedAuthority ||= await captureInstallationAuthority({ db, authUid });
+  if (!staffAuthorization) throw Object.assign(new Error('Staff enrolment required'), { code: 'STAFF_ENROLMENT_REQUIRED' });
   const lock = await acquireAppSessionLock({
     db, authUid, operation: 'issue', nowMs: clock(), clock, ttlMs: APP_SESSION_ISSUANCE_LOCK_TTL_MS,
   });
@@ -237,6 +285,8 @@ const issueDriverAppSession = async ({
   let committed = false;
   try {
     await ensureNoActiveAccountDeletion({ db, authUid });
+    const recovered = await recoverStaffPublication({ db, authUid, capturedAuthority, staffAuthorization, lock, clock, createIssuer });
+    if (recovered) { committed = true; return recovered; }
     const [existingSnapshot, userSnapshot, notificationDeviceSnapshot] = await Promise.all([
       db.ref(`app_sessions/${authUid}`).once('value'),
       db.ref(`users/${authUid}`).once('value'),
@@ -246,14 +296,7 @@ const issueDriverAppSession = async ({
     const session = buildDriverSessionRecord({
       authUid, driverId, tourId, driverLoginPolicyGeneration, nowMs,
     });
-    const updates = existingSession?.sessionId
-      ? buildAppSessionCleanupUpdates({
-          session: existingSession,
-          userProfile: userSnapshot.val() || {},
-          notificationDevice: notificationDeviceSnapshot.val() || null,
-          nowMs,
-        })
-      : {};
+    const updates = buildPreviousSessionCleanup({ existingSession, userSnapshot, notificationDeviceSnapshot, nowMs });
     const eventId = db.ref('app_session_events').push().key;
     Object.assign(updates, buildRoleTransitionCleanupUpdates({
       authUid,
@@ -293,7 +336,12 @@ const issueDriverAppSession = async ({
       operation: 'issue', expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS,
       sessionId: session.sessionId, sessionRevision: session.sessionRevision };
     assertFreshIssuanceDispatch({ clock, expiresAtMs: finalCommitNowMs + APP_SESSION_ISSUANCE_LOCK_TTL_MS });
-    await db.ref().update(updates);
+    updates[`driver_device_authorizations/${authUid}`] = { schemaVersion: 1, driverId,
+      generation: staffAuthorization.generation, redemptionId: staffAuthorization.redemptionId,
+      sessionId: session.sessionId, state: 'active', issuedAtMs: finalCommitNowMs };
+    const authority = await prepareSessionPublication({ db, authUid, capturedAuthority, session, updates,
+      previousSessionId: existingSession?.sessionId || null, staff: staffAuthorization, nowMs: finalCommitNowMs });
+    await commitSessionPublication({ db, authUid, authority, session, updates, createIssuer });
     committed = true;
     return session;
   } finally {

@@ -26,7 +26,6 @@ const {
 } = require('./passengerLoginSecurity');
 const {
   PASSENGER_IDENTITY_VERSION,
-  authorizePassengerLoginDevice,
   buildPassengerIdentitySecurityUpdates,
   ensureOpaquePassengerIdentity,
   isOpaquePassengerId,
@@ -48,6 +47,9 @@ const PASSENGER_LOGIN_LOCK_TTL_MS = 3 * 60 * 1000;
 const failure = (status, reason) => ({ ok: false, status, body: { valid: false, reason } });
 const isBookingLoginEligible = (booking) => booking.loginEligible !== false
   && readSourceRoster(booking)?.state !== 'not_in_report';
+const canonicalIdentityTourId = identity => normalizeTourKeyForComparison(
+  typeof identity.tourId === 'string' ? identity.tourId.trim() : '',
+);
 const identityIncompleteFailure = () => ({
   ok: false,
   status: 200,
@@ -133,8 +135,7 @@ const authorizePassengerLoginRequest = async ({ req, bookingRef, email }) => {
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension }) => {
-  const database = admin.database();
+const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension, database = admin.database() }) => {
   const identitySnapshot = await database.ref(`booking_identities/${bookingRef}`).once('value');
   if (!identitySnapshot.exists()) {
     log.warn('Passenger login verification failed', { bookingRef, networkDimension, cause: 'BOOKING_NOT_FOUND' });
@@ -146,9 +147,7 @@ const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension }
     return failure(401, 'INVALID_CREDENTIALS');
   }
   const resolvedBookingRef = normalizeBookingRef(identity.bookingRef || bookingRef);
-  const canonicalTourId = normalizeTourKeyForComparison(
-    typeof identity.tourId === 'string' ? identity.tourId.trim() : '',
-  );
+  const canonicalTourId = canonicalIdentityTourId(identity);
   if (!resolvedBookingRef || !canonicalTourId) {
     log.warn('Booking identity missing essential identifiers', { bookingRef });
     return identityIncompleteFailure();
@@ -192,7 +191,7 @@ const loadPassengerLoginContext = async ({ bookingRef, email, networkDimension }
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
-const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networkDimension }) => {
+const authorizePassengerIdentity = async ({ context, bookingRef, networkDimension }) => {
   const { canonicalTourId, database, identity, resolvedBookingRef } = context;
   const securityRef = database.ref(`passenger_identity_security/${resolvedBookingRef}`);
   const securedIdentity = await ensureOpaquePassengerIdentity({
@@ -212,7 +211,11 @@ const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networ
   const stablePassengerId = securedIdentity.passengerPrincipalId;
   if (!isOpaquePassengerId(stablePassengerId)) return identityIncompleteFailure();
   try {
-    await authorizePassengerLoginDevice({ securityRef, authUid });
+    const security = securedIdentity.identity;
+    if (security.loginLocked === true) throw Object.assign(new Error('Identity locked'), { code: 'REAUTHORIZE_REQUIRED' });
+    if (security.deviceAuthorizationVersion !== undefined && security.deviceAuthorizationVersion !== 2) {
+      throw new Error('Unsupported device authority');
+    }
   } catch (authorizationError) {
     const typedError = /** @type {{ code?: string }} */ (authorizationError);
     const reason = typedError?.code === 'REAUTHORIZE_REQUIRED' ? 'REAUTHORIZE_REQUIRED' : 'IDENTITY_INCOMPLETE';
@@ -229,7 +232,7 @@ const authorizePassengerIdentity = async ({ authUid, context, bookingRef, networ
 /** @type {(...args: any[]) => Promise<any>} */
 const issueVerifiedPassengerSession = async ({
   authUid, context, stablePassengerId, bookingRef, email, networkDimension,
-  appSessionLock = null, passengerDeletionLock = null,
+  appSessionLock = null, passengerDeletionLock = null, capturedAuthority = null,
 }) => {
   const { canonicalTourId, database, resolvedBookingRef } = context;
   const sessionIssuedAtMs = Date.now();
@@ -250,6 +253,11 @@ const issueVerifiedPassengerSession = async ({
     nowMs: sessionIssuedAtMs,
   });
   if (!identityUpdates) return identityIncompleteFailure();
+  Object.assign(identityUpdates, {
+    [`passenger_identity_security/${resolvedBookingRef}/deviceAuthorizationVersion`]: 2,
+    [`passenger_identity_security/${resolvedBookingRef}/authorizedAuthUids/${authUid}`]: true,
+    [`passenger_identity_security/${resolvedBookingRef}/passengerIdentityVersion`]: 'pax_v2',
+  });
   const appSession = await issuePassengerAppSession({
     db: database,
     authUid,
@@ -270,6 +278,7 @@ const issueVerifiedPassengerSession = async ({
     nowMs: sessionIssuedAtMs,
     existingAppSessionLock: appSessionLock,
     existingPassengerDeletionLock: passengerDeletionLock,
+    capturedAuthority,
   });
   let roleClaimsReady = false;
   try {
@@ -315,9 +324,12 @@ const reloadLockedPassengerContext = async ({ context, bookingRef, email, networ
 };
 
 /** @type {(...args: any[]) => Promise<any>} */
+const { captureInstallationAuthority } = loadLegacyLibrary('sessionPublicationAuthority');
+
 const executePassengerLogin = async ({ req, bookingRef, email }) => {
   const requestAccess = await authorizePassengerLoginRequest({ req, bookingRef, email });
   if (!requestAccess.ok) return requestAccess;
+  const capturedAuthority = await captureInstallationAuthority({ db: admin.database(), authUid: requestAccess.authUid });
   try {
     await ensureNoActiveAccountDeletion({ db: admin.database(), authUid: requestAccess.authUid });
   } catch (error) {
@@ -378,6 +390,7 @@ const executePassengerLogin = async ({ req, bookingRef, email }) => {
       stablePassengerId: identityAccess.stablePassengerId,
       appSessionLock,
       passengerDeletionLock,
+      capturedAuthority,
     });
   } catch (error) {
     if (error?.code === 'ACCOUNT_DELETION_IN_PROGRESS') {

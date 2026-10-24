@@ -4,6 +4,7 @@ const driverOperationalLifecycleService = require('./driverOperationalLifecycleS
 const { clearNotificationFeedCache } = require('./notificationInboxService');
 const { stopPassengerTrip, purgePassengerTrip } = require('./passenger-trip/tripLifecycle');
 const { createTripCache } = require('./passenger-trip/tripCache');
+const { CLEANUP_KEY, serializeLocalSessionWrite, blockLocalSessionWrites } = require('./localSessionWriteBoundary');
 
 const APP_LOCAL_KEYS = [
   '@LLT:tourData',
@@ -38,6 +39,11 @@ const notificationLifecycleKeys = ({ authUid, sessionId }) => {
 const loadPhotoCacheService = () => {
   try { return require('./photoViewerCacheService'); } catch { return null; }
 };
+const clearSessionDiagnostics = async () => {
+  const logger = require('./loggerService');
+  await (logger.default || logger).clearSessionDiagnostics?.();
+  await require('./crashDiagnosticsService').clearSessionDiagnostics?.();
+};
 
 const createLocalSessionCleanupService = ({
   storage = AsyncStorage,
@@ -47,6 +53,7 @@ const createLocalSessionCleanupService = ({
   photoCache = loadPhotoCacheService(),
   beforeSessionKeyCommit = null,
   tripLifecycle = null,
+  clearDiagnostics = process.env.NODE_ENV === 'test' ? async () => {} : clearSessionDiagnostics,
 } = {}) => {
   const trips = tripLifecycle || { stopPassengerTrip,
     purgePassengerTrip: storage === AsyncStorage ? purgePassengerTrip : (scope) => createTripCache(storage).purge(scope),
@@ -62,9 +69,15 @@ const createLocalSessionCleanupService = ({
     tourData,
     driverOperationalScope = null,
     requireCompleteScope = false,
+    discardQueuedActions = false,
   } = {}) => {
     if (scopedCleanupInFlight) return scopedCleanupInFlight;
     scopedCleanupInFlight = (async () => {
+      blockLocalSessionWrites(storage);
+      await serializeLocalSessionWrite(storage, () => storage.setItem(CLEANUP_KEY, JSON.stringify({
+        state: 'pending', scope: { authUid, appSession, bookingData, tourData, driverOperationalScope,
+          requireCompleteScope, discardQueuedActions },
+      })));
       const role = appSession?.principalType || (bookingData?.isDriver ? 'driver' : 'passenger');
       const tourId = appSession?.tourId || tourData?.id || null;
       const principalId = appSession?.principalId || null;
@@ -128,6 +141,7 @@ const createLocalSessionCleanupService = ({
       // Fence incoming callbacks synchronously before the first awaited purge.
       if (tripScope) trips.stopPassengerTrip(tripScope);
       const operations = {
+        clearDiagnostics,
         stopOfflineReplay: () => offline.setActiveSessionScope(null),
         clearNotificationLifecycle: () => storage.multiRemove(notificationLifecycleKeys({
           authUid,
@@ -139,11 +153,11 @@ const createLocalSessionCleanupService = ({
       if (tripScope) operations.clearPassengerTrip = () => trips.purgePassengerTrip(tripScope);
 
       if (role === 'driver' && resolvedDriverOperationalScope) {
-        operations.clearDriverOperationalData = () => driverLifecycle.purge(resolvedDriverOperationalScope);
+        operations.clearDriverOperationalData = () => driverLifecycle.purge(resolvedDriverOperationalScope, { purgeQueuedActions: discardQueuedActions });
       } else if (tourId && ownerId) {
         operations.clearTourPack = () => offline.purgeTourPack(tourId, role, { ownerId });
       }
-      if (tourId && principalId) {
+      if (discardQueuedActions && tourId && principalId) {
         operations.clearQueuedActions = () => offline.purgeActionsForScope({
           scope: { tourId, principalId, role, authUid, cacheOwnerId: ownerId },
         });
@@ -178,7 +192,9 @@ const createLocalSessionCleanupService = ({
         results,
       };
     })();
-    try { return await scopedCleanupInFlight; } finally { scopedCleanupInFlight = null; }
+    try { return await scopedCleanupInFlight; }
+    catch (error) { return { success: false, attempted: ['persistCleanupBoundary'], failures: [{ name: 'persistCleanupBoundary', error: error?.message || String(error) }], results: {} }; }
+    finally { scopedCleanupInFlight = null; }
   };
 
   const commitSessionKeys = async ({ preservePendingSessionEnd = true } = {}) => {
@@ -189,9 +205,12 @@ const createLocalSessionCleanupService = ({
         // Generic purges must not erase an unacknowledged server operation.
         // Only acknowledged account deletion explicitly clears it here.
         const keys = preservePendingSessionEnd
-          ? APP_LOCAL_KEYS.filter(key => key !== '@LLT:pendingSessionEnd:v1')
+          ? APP_LOCAL_KEYS.filter(key => !['@LLT:pendingSessionEnd:v1', '@LLT:safetyOfflineQueue', '@LLT:safetyOfflineQueue:corruptBackup'].includes(key))
           : APP_LOCAL_KEYS;
-        const value = await storage.multiRemove(keys);
+        const value = await serializeLocalSessionWrite(storage, async () => {
+          await storage.multiRemove(keys);
+          await storage.setItem(CLEANUP_KEY, JSON.stringify({ state: 'complete' }));
+        });
         return {
           success: true,
           attempted: ['clearSessionKeys'],
@@ -229,7 +248,13 @@ const createLocalSessionCleanupService = ({
     try { return await cleanupInFlight; } finally { cleanupInFlight = null; }
   };
 
-  return { cleanup, commitSessionKeys, prepareScopedCleanup };
+  const readPendingCleanup = async () => {
+    const raw = await storage.getItem(CLEANUP_KEY);
+    if (!raw) return null;
+    try { const value = JSON.parse(raw); return value.state === 'pending' ? value.scope : null; }
+    catch { throw new Error('Local cleanup recovery state is unreadable'); }
+  };
+  return { cleanup, commitSessionKeys, prepareScopedCleanup, readPendingCleanup };
 };
 
 const localSessionCleanupService = createLocalSessionCleanupService();

@@ -1,3 +1,4 @@
+const { withHttpRequestBoundary } = require('../httpRequestBoundary');
 const INVALID_SESSION_REASONS = new Set(['SESSION_CHANGED', 'SESSION_EXPIRED', 'SESSION_NOT_FOUND',
   'SESSION_REVOKED', 'SESSION_SCOPE_MISMATCH', 'SESSION_INACTIVE',
   'SESSION_UID_MISMATCH', 'SESSION_ROLE_MISMATCH', 'SESSION_TOUR_MISMATCH', 'PARTICIPANT_MISSING',
@@ -14,19 +15,21 @@ const createTripApi = ({ getFirebase = () => require('../../firebase'), fetchFn 
     if (!user || user.uid !== scope.authUid) throw Object.assign(new Error('AUTH_UID_CHANGED'), { invalidSession: true });
     const url = endpoint();
     if (!url) throw new Error('ENDPOINT_UNAVAILABLE');
-    const abort = new AbortController();
-    const cancel = () => abort.abort();
-    signal?.addEventListener('abort', cancel);
-    const timer = setTimeout(cancel, timeoutMs);
-    try {
+    return withHttpRequestBoundary(async boundary => {
+      const check = () => {
+        boundary.check();
+        if (firebase.auth.currentUser !== user) throw Object.assign(new Error('AUTH_UID_CHANGED'), { invalidSession: true });
+      };
       const [token, appCheck] = await Promise.all([user.getIdToken(), firebase.getCurrentAppCheckToken?.()]);
-      if (signal?.aborted || abort.signal.aborted) throw new Error('REQUEST_CANCELLED');
-      const response = await fetchFn(url, { method: 'POST', signal: abort.signal,
+      check();
+      const response = await fetchFn(url, { method: 'POST', signal: boundary.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
           ...(appCheck ? { 'x-firebase-appcheck': appCheck } : {}) },
         body: JSON.stringify({ expectedSessionId: scope.sessionId, parts, versions }),
       });
+      check();
       const payload = await response.json();
+      check();
       if (!response.ok) {
         const reason = payload?.reason || 'SERVICE_UNAVAILABLE';
         // The booking-wide deletion barrier can belong to another authorized
@@ -35,7 +38,7 @@ const createTripApi = ({ getFirebase = () => require('../../firebase'), fetchFn 
         throw Object.assign(new Error(reason), { reason, invalidSession: INVALID_SESSION_REASONS.has(reason) });
       }
       return payload;
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
+    }, { timeoutMs, signal });
   },
   subscribeSignals(scope, onSignal, onError) {
     const db = getFirebase().realtimeDb;

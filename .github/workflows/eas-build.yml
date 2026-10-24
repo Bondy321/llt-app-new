@@ -3,6 +3,11 @@ name: EAS Build
 on:
   workflow_dispatch:
     inputs:
+      prerequisites_verified:
+        description: I verified deployed backend and rules, real App Check providers/configuration, and acceptance for this exact reviewed commit
+        required: true
+        default: false
+        type: boolean
       platform:
         description: Platform to build
         required: true
@@ -17,9 +22,13 @@ concurrency:
   group: eas-build-production-${{ github.event.inputs.platform }}
   cancel-in-progress: false
 
+env:
+  TZ: Europe/London
+
 jobs:
   build-production:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prerequisites_verified == true }}
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
       actions: read
@@ -40,31 +49,51 @@ jobs:
       EXPO_PUBLIC_SUPPORT_PHONE: '+441414876737'
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'false'
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'false'
-      LLT_REQUIRE_PRODUCTION_APPCHECK: 'false'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'true'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'true'
+      LLT_REQUIRE_PRODUCTION_APPCHECK: 'true'
+      EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: 'true'
       LLT_VALIDATE_PLATFORM: ${{ github.event.inputs.platform }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
       - name: Verify build commit is on main
-        run: |
-          git fetch origin main --depth=1
-          git merge-base --is-ancestor ${{ github.sha }} origin/main
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: bash .github/actions/verified-node/verify-main.sh
 
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-            web-admin/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -74,23 +103,20 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
 
-      - name: Setup Java for Firebase emulators
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+      - name: Select and verify runner Java 21 without JavaScript actions
+        uses: ./.github/actions/runner-java21
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Audit production dependency graphs
-        run: npm run security:audit:release
 
       - name: Install Functions dependencies
         run: npm --prefix functions ci
 
       - name: Install web admin dependencies for integration tests
         run: npm --prefix web-admin ci
+
+      - name: Audit production dependency graphs
+        run: npm run security:audit:release
 
       - name: Run mobile smoke tests
         run: npm run test:mobile:ota
@@ -105,11 +131,7 @@ jobs:
         run: npm run validate:expo-env -- --platform=${{ github.event.inputs.platform }}
 
       - name: Setup Expo and EAS CLI
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: 22.6.0
-          packager: npm
-          token: ${{ env.EXPO_TOKEN }}
+        run: npm install --global eas-cli@22.6.0
 
       - name: Verify pinned release CLIs
         run: node scripts/release/checkCliVersions.js --check-eas

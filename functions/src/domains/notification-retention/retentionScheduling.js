@@ -38,7 +38,7 @@ const materializeCanonicalRetentionBoundary = async ({ db, jobId, job }) => {
     || (Number.isSafeInteger(job.retentionDueAtMs) && job.retentionDueAtMs > 0)) return job;
   const retentionDueAtMs = job.completedAtMs + RETENTION_MS;
   const boundary = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (current) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (current) => {
     if (!current || current.jobId !== jobId || current.status !== job.status
       || current.completedAtMs !== job.completedAtMs) return undefined;
     if (Number.isSafeInteger(current.retentionDueAtMs) && current.retentionDueAtMs > 0) {
@@ -160,7 +160,7 @@ const ensureNotificationRetentionScheduled = async ({
   nowMs = Date.now(),
 }) => {
   if (!validJobId(jobId)) return scheduleResult(false, 'invalid_job_id');
-  const canonicalJob = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const canonicalJob = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   if (!canonicalJob || canonicalJob.jobId !== jobId) return scheduleResult(false, 'missing_job');
   if (suppliedJob && suppliedJob.jobId !== jobId) {
     return scheduleResult(false, 'job_identity_changed');

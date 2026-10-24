@@ -48,3 +48,6 @@ yarn-error.log*
 # Testing
 coverage/
 notepad.md
+
+# Nondeployable admin verification output
+web-admin/verification-dist/

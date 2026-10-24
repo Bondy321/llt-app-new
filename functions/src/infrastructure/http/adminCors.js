@@ -37,7 +37,7 @@ const applyAuthenticatedCors = (req, res) => {
   if (requestOrigin && allowed) res.set('Access-Control-Allow-Origin', requestOrigin);
   res.set('Vary', 'Origin');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Firebase-AppCheck');
   res.set('Access-Control-Max-Age', '3600');
   return allowed;
 };

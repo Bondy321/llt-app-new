@@ -1,5 +1,7 @@
 'use strict';
 
+const { derivePassengerAccountDeletionKey } = require('./accountDeletionBoundary');
+
 const {
   acquirePassengerAccountDeletionLock,
   ensureNoActiveAccountDeletion,
@@ -11,6 +13,7 @@ const {
 } = require('./accountDeletionCoordination');
 
 module.exports = {
+  derivePassengerAccountDeletionKey,
   acquirePassengerAccountDeletionLock,
   ensureNoActiveAccountDeletion,
   ensureNoActivePassengerAccountDeletion,

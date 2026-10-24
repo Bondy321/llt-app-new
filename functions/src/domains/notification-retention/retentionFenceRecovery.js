@@ -61,7 +61,7 @@ const recoverInactiveLegacyFence = async ({
   const compatibleLegacyFallback = !rolloutBefore.valid
     && rolloutBefore.phase === 'legacy' && rolloutBefore.revision === 0;
   if (!rolloutBefore.valid && !compatibleLegacyFallback) return null;
-  const canonicalRef = db.ref(`notification_jobs/${jobId}`);
+  const canonicalRef = db.ref(`notification_jobs_v2/${jobId}`);
   const observed = (await canonicalRef.once('value')).val();
   const fence = observed?.retentionFence;
   const fenceRolloutCompatible = ['legacy', 'shadow'].includes(fence?.rolloutPhase)
@@ -160,7 +160,7 @@ const recoverInactiveCompactorFence = async ({
   const fenceId = fenceIdFor(jobId, state.generation);
   let recoveredJob = null;
   const canonicalResult = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_jobs/${jobId}`), (current) => {
+    db.ref(`notification_jobs_v2/${jobId}`), (current) => {
     if (!jobMatchesState(current, state, jobId)
       || current.retentionFence?.fenceId !== fenceId
       || current.retentionFence.status !== 'active'
@@ -185,7 +185,7 @@ const recoverInactiveCompactorFence = async ({
   if (rolloutAfter.phase !== rolloutBefore.phase || rolloutAfter.revision !== rolloutBefore.revision
     || recoveryIdentityAfter.rawFingerprint !== recoveryIdentityBefore.rawFingerprint) {
     await transactionWithAuthoritativeExistingValue(
-      db.ref(`notification_jobs/${jobId}`), (current) => {
+      db.ref(`notification_jobs_v2/${jobId}`), (current) => {
       const replacementStillOwned = replacementFence
         ? current?.retentionFence?.fenceId === replacementFence.fenceId
           && Number(current?.retentionFence?.generation) === Number(replacementFence.generation)

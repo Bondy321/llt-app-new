@@ -8,7 +8,7 @@ const {
   assertFails,
 } = require('@firebase/rules-unit-testing');
 const { passengerAuthorityUpdates, driverAuthorityUpdates, sessionIdFor } = require('./sessionFixtures');
-const { sendInternalDriverMessage } = require('../../services/chatService');
+const { sendInternalMessageDirect } = require('../../services/chatService');
 const { toRealtimeKeySegment } = require('../../services/identityService');
 
 const ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
@@ -47,7 +47,7 @@ const rules = fs
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 const buildChatStatus = ({ uid, principalId, principalType, scope = 'group', kind }) => ({
   schemaVersion: 2,
@@ -410,29 +410,29 @@ test('allows driver typing and presence through verified raw app-session leaves'
   );
 });
 
-test('legacy chat status remains compatible until the explicit rollout cutover', async () => {
+test('legacy shared chat status stays denied regardless of rollout metadata', async () => {
   const groupTypingPath = `chats/${TOUR_ID}/typing/${PASSENGER_AUTH_UID}`;
   const groupPresencePath = `chats/${TOUR_ID}/presence/${PASSENGER_AUTH_UID}`;
   const internalTypingPath = `internal_chats/${INTERNAL_TOUR_ID}/typing/${DRIVER_PRINCIPAL_ID}`;
   const internalPresencePath = `internal_chats/${INTERNAL_TOUR_ID}/presence/${DRIVER_PRINCIPAL_ID}`;
 
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
     name: 'Passenger One',
     isDriver: false,
     timestamp: Date.now(),
   }));
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
     name: 'Passenger One',
     isDriver: false,
     lastSeen: Date.now(),
     online: true,
   }));
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
     name: 'Driver Bondy',
     isDriver: true,
     timestamp: Date.now(),
   }));
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
     name: 'Driver Bondy',
     isDriver: true,
     lastSeen: Date.now(),
@@ -446,23 +446,23 @@ test('legacy chat status remains compatible until the explicit rollout cutover',
     [`${internalPresencePath}/projectionRevision`]: 1,
   }));
 
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupTypingPath).set({
     name: 'Passenger One',
     isDriver: false,
     timestamp: Date.now(),
   }));
-  await assertSucceeds(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
+  await assertFails(dbFor(PASSENGER_AUTH_UID).ref(groupPresencePath).set({
     name: 'Passenger One',
     isDriver: false,
     online: false,
     lastSeen: Date.now(),
   }));
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalTypingPath).set({
     name: 'Driver Bondy',
     isDriver: true,
     timestamp: Date.now(),
   }));
-  await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
+  await assertFails(dbFor(DRIVER_AUTH_UID).ref(internalPresencePath).set({
     name: 'Driver Bondy',
     isDriver: true,
     online: false,
@@ -530,23 +530,23 @@ test('allows admin actions per existing policy (message text edit)', async () =>
   assert.equal(snapshot.val(), 'admin text update');
 });
 
-test('service-generated internal driver message payload is accepted by rules', async () => {
+// Queue durability is exercised by mobileReliabilityJourneys. Here the actual
+// production delivery builder and Firebase SDK must agree on the wire schema.
+test('production internal driver delivery payload is accepted by real SDK rules', async () => {
   const senderInfo = {
     name: 'Driver Bondy',
+    authUid: DRIVER_AUTH_UID,
     principalId: DRIVER_PRINCIPAL_ID,
     principalType: 'driver',
     isDriver: true,
   };
 
-  const result = await sendInternalDriverMessage(
-    INTERNAL_TOUR_ID,
-    'Internal operations update',
-    senderInfo,
-    dbFor(DRIVER_AUTH_UID),
-    { messageId: 'int_rules_001' }
-  );
+  const result = await sendInternalMessageDirect({
+    tourId: INTERNAL_TOUR_ID, text: 'Internal operations update', senderInfo,
+    messageId: 'int_rules_001', idempotencyKey: 'int_rules_001', timestamp: new Date().toISOString(),
+  }, dbFor(DRIVER_AUTH_UID));
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, true, result.error);
   const written = await dbFor(DRIVER_AUTH_UID).ref(`internal_chats/${INTERNAL_TOUR_ID}/messages/int_rules_001`).get();
   assert.equal(written.exists(), true);
   assert.equal(written.child('senderType').val(), 'driver');

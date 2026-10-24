@@ -22,10 +22,10 @@ Normal logout and session revocation affect only the captured installation/sessi
 
 End the app session before issuing notification logout: both endpoints acquire the same per-device server lock. Generic local cleanup preserves the pending logout operation until exact-session completion; acknowledged account deletion explicitly clears it. Session persistence is serialized, and a delayed completion cannot remove a newer session or pending operation. Notification requests have a 15-second total deadline covering revision allocation, authentication, retries and response bodies. Connected logout retries back off from one second to 30 seconds and pause offline.
 
-Existing records without a device authorization version retain their exact `authorizedAuthUid` compatibility proof.
-The next successful verified login atomically promotes that original UID and the requesting UID into the version-2
-map without rotating the principal. Once version 2 exists, only a true map leaf grants device authorization; a retained
-legacy scalar cannot bypass removal of that leaf. Unknown versions and `loginLocked: true` fail closed. Explicit
+Existing scalar records grant no current access. A successful fresh credential verification authorises only
+the requesting UID in the version-2 map; it does not promote the old scalar UID. Only a true exact map leaf
+grants device authorization, and a retained legacy scalar cannot bypass removal of that leaf.
+Unknown versions and `loginLocked: true` fail closed. Explicit
 migration/security-review locks remain in force; enabling multiple phones does not remove them.
 
 This security state remains separate from sync-owned booking credential records, so a booking refresh cannot erase
@@ -35,11 +35,13 @@ checks continue to apply independently on every phone.
 Clients cannot read, create, replace or enumerate device authorization records. The server-owned account-deletion
 workflow removes only the requesting phone's exact map leaf and matching legacy scalar; other phones retain access.
 Deletion still removes shared passenger-principal app content under the existing account-deletion contract, which
-the passenger confirmation explains. The older compatibility scalar-cleanup permission remains bounded to its owner.
+the passenger confirmation explains. Scalar cleanup is server-owned; clients cannot remove identity bindings or
+authorization records through an obsolete deletion compatibility path.
 
-## Production migration
+## Historical opaque-identity migration tool
 
-Run the idempotent migration from `functions/` before deploying the stricter rules. Dry-run first:
+This retained tool is not a first-launch prerequisite or authorization to reset shared data. Use it only
+for an independently reviewed exact historical identity repair, with owner-approved scope and a dry-run:
 
 ```powershell
 npm run migrate:opaque-passenger-identities

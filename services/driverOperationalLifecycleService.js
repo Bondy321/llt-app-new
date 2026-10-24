@@ -53,7 +53,7 @@ function createDriverOperationalLifecycleService({
   manifests = driverManifestCacheService,
   offline = offlineSyncService,
 } = {}) {
-  const purge = async (scopeInput, { purgeQueuedActions = true } = {}) => {
+  const purge = async (scopeInput, { purgeQueuedActions = false } = {}) => {
     const scope = normalizeDriverOperationalScope(scopeInput);
     if (!scope.ok) {
       return { success: false, error: scope.reason, results: {} };

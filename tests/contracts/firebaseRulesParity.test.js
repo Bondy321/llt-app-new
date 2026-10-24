@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { assertOrdinaryRuleDenied, unwrapReviewedServerValidation } = require('../helpers/reviewedRuleConstraints');
 const definitions = require('../../contracts/definitions/contracts.v1.json');
 const { readFunctionsArchitectureSource } = require('../helpers/readAppArchitectureSource');
 
@@ -77,22 +78,20 @@ test('account-deletion infrastructure is private and rollout validation is exact
     'media_record_locks',
   ]) {
     assert.equal(parsedDatabaseRules[rootName]['.read'], false, `${rootName} read`);
-    assert.equal(parsedDatabaseRules[rootName]['.write'], false, `${rootName} write`);
+    assertOrdinaryRuleDenied(assert, parsedDatabaseRules[rootName]['.write'], `${rootName} write`);
   }
 
   const rollout = parsedDatabaseRules.account_deletion_rollout.v1;
-  assert.equal(
-    rollout['.validate'],
-    "!newData.exists() || (newData.hasChildren(['schemaVersion', 'phase', 'revision', 'updatedAtMs']) && newData.child('schemaVersion').val() === 1 && (newData.child('phase').val() === 'compatibility' || newData.child('phase').val() === 'server_only') && newData.child('revision').isNumber() && newData.child('revision').val() >= 1 && newData.child('updatedAtMs').isNumber() && newData.child('updatedAtMs').val() > 0)",
-  );
-  assert.equal(rollout.$other['.validate'], false);
+  assert.equal(unwrapReviewedServerValidation(rollout['.validate']),
+    "!newData.exists() || (newData.hasChildren(['schemaVersion', 'phase', 'revision', 'updatedAtMs']) && newData.child('schemaVersion').val() === 1 && newData.child('phase').val() === 'server_only' && newData.child('revision').isNumber() && newData.child('revision').val() >= 1 && newData.child('updatedAtMs').isNumber() && newData.child('updatedAtMs').val() > 0)");
+  assertOrdinaryRuleDenied(assert, rollout.$other['.validate'], 'unknown rollout field');
   assert.deepEqual(
     Object.keys(rollout).filter((key) => !key.startsWith('.')).sort(),
     ['$other', 'phase', 'revision', 'schemaVersion', 'updatedAtMs'].sort(),
   );
 });
 
-test('the complete compatibility predicate gates only the five legacy deletion permissions', () => {
+test('legacy client account deletion cannot fall back to compatibility permissions', () => {
   const gatedRules = [
     parsedDatabaseRules.users.$userId['.write'],
     parsedDatabaseRules.logs.$userId['.write'],
@@ -101,11 +100,15 @@ test('the complete compatibility predicate gates only the five legacy deletion p
     parsedDatabaseRules.passenger_identity_security.$bookingRef.authorizedAuthUid['.write'],
   ];
   for (const rule of gatedRules) {
-    assert.equal(rule.includes(ACCOUNT_DELETION_COMPATIBILITY_PREDICATE), true);
+    // Entirely server-owned branches reject every ordinary client write.
+    if (rule === false) continue;
+    assert.equal(typeof rule, 'string');
+    assert.equal(rule.includes(ACCOUNT_DELETION_COMPATIBILITY_PREDICATE), false);
+    assert.match(rule, /(?:&& false|newData\.exists\(\) \|\| false)/u, 'ordinary legacy deletion remains explicitly disabled');
   }
 
   const occurrences = databaseRules.split(ACCOUNT_DELETION_COMPATIBILITY_PREDICATE).length - 1;
-  assert.equal(occurrences, 5);
+  assert.equal(occurrences, 0);
 
   for (const unaffectedRule of [
     parsedDatabaseRules.chats.$tourId.messages.$messageId.reactions.$emoji.$id['.write'],

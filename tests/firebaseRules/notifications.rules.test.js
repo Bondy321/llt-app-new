@@ -33,7 +33,7 @@ const parseEmulator = () => {
   return { host, port: Number(portText) };
 };
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(databaseURL);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(databaseURL);
 const loggedOutDb = () => testEnv.unauthenticatedContext().database(databaseURL);
 
 const notificationDevice = (overrides = {}) => ({
@@ -94,7 +94,7 @@ test.before(async () => {
     await db.ref(`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`).set(true);
     await db.ref(`tour_notifications/${TOUR_ID}/${NOTICE_ID}`).set(notice());
     await db.ref().update({
-      [`notification_jobs/job_notify_1`]: {
+      [`notification_jobs_v2/job_notify_1`]: {
         version: 1,
         jobId: 'job_notify_1',
         status: 'queued',
@@ -103,9 +103,9 @@ test.before(async () => {
         updatedAtMs: 1786525200000,
         coalescingKey: 'tour:NOTIFY_TOUR_1:announcement',
       },
-      [`notification_job_coalescing/tour_NOTIFY_TOUR_1`]: { jobId: 'job_notify_1' },
-      [`notification_job_token_claims/job_notify_1/token_hash`]: { claimedAtMs: 1786525200000 },
-      [`notification_delivery_attempts/attempt_notify_1`]: {
+      [`notification_job_coalescing_v2/tour_NOTIFY_TOUR_1`]: { jobId: 'job_notify_1' },
+      [`notification_job_token_claims_v2/job_notify_1/token_hash`]: { claimedAtMs: 1786525200000 },
+      [`notification_delivery_attempts_v2/attempt_notify_1`]: {
         jobId: 'job_notify_1',
         status: 'receipt_pending',
         availableAtMs: 1786525200000,
@@ -113,7 +113,7 @@ test.before(async () => {
         expiresAtMs: 1786611600000,
         updatedAtMs: 1786525200000,
       },
-      [`notification_delivery_warnings/warning_notify_1`]: {
+      [`notification_delivery_warnings_v2/warning_notify_1`]: {
         status: 'open', severity: 'warning', updatedAtMs: 1786525200000,
       },
       [`notification_devices/${PASSENGER_UID}`]: notificationDevice(),
@@ -282,11 +282,11 @@ test('notification read cleanup jobs remain server private', async () => {
 
 test('new notification delivery roots are server-owned and unreadable to ordinary clients', async () => {
   const serverRoots = [
-    'notification_jobs/job_notify_1',
-    'notification_job_coalescing/tour_NOTIFY_TOUR_1',
-    'notification_job_token_claims/job_notify_1/token_hash',
-    'notification_delivery_attempts/attempt_notify_1',
-    'notification_delivery_warnings/warning_notify_1',
+    'notification_jobs_v2/job_notify_1',
+    'notification_job_coalescing_v2/tour_NOTIFY_TOUR_1',
+    'notification_job_token_claims_v2/job_notify_1/token_hash',
+    'notification_delivery_attempts_v2/attempt_notify_1',
+    'notification_delivery_warnings_v2/warning_notify_1',
     'marketing_notification_details/marketing_notify_1',
   ];
 
@@ -308,12 +308,12 @@ test('new notification delivery roots are server-owned and unreadable to ordinar
 
 test('retention work and rollout state remain private even from authenticated administrators', async () => {
   const privatePaths = [
-    'notification_retention/v1/jobs/job_notify_1',
-    'notification_retention/v1/queue/0000000000001_job_notify_1',
-    'notification_retention/v1/repair/orphan_attempts',
-    'notification_retention/v1/preparation',
-    'notification_retention/v1/evidence/run_1',
-    'notification_retention_rollout/v1',
+    'notification_retention/v2/jobs/job_notify_1',
+    'notification_retention/v2/queue/0000000000001_job_notify_1',
+    'notification_retention/v2/repair/orphan_attempts',
+    'notification_retention/v2/preparation',
+    'notification_retention/v2/evidence/run_1',
+    'notification_retention_rollout/v2',
   ];
   for (const rootPath of privatePaths) {
     await assertFails(loggedOutDb().ref(rootPath).get());
@@ -337,32 +337,33 @@ test('only self can read private notification device and consent records', async
 
 test('admins can inspect reporting roots but cannot client-write server-owned notification records', async () => {
   const reportingRoots = [
-    'notification_jobs/job_notify_1',
-    'notification_delivery_attempts/attempt_notify_1',
-    'notification_delivery_warnings/warning_notify_1',
+    'notification_jobs_v2/job_notify_1',
+    'notification_delivery_attempts_v2/attempt_notify_1',
+    'notification_delivery_warnings_v2/warning_notify_1',
     'marketing_notification_details/marketing_notify_1',
   ];
   for (const rootPath of reportingRoots) {
     await assertSucceeds(dbFor(ADMIN_UID).ref(rootPath).get());
     await assertFails(dbFor(ADMIN_UID).ref(rootPath).set({ forged: true }));
   }
-  await assertFails(dbFor(ADMIN_UID).ref('notification_job_coalescing/tour_NOTIFY_TOUR_1').get());
-  await assertFails(dbFor(ADMIN_UID).ref('notification_job_token_claims/job_notify_1').get());
+  await assertFails(dbFor(ADMIN_UID).ref('notification_job_coalescing_v2/tour_NOTIFY_TOUR_1').get());
+  await assertFails(dbFor(ADMIN_UID).ref('notification_job_token_claims_v2/job_notify_1').get());
   await assertFails(dbFor(ADMIN_UID).ref('notification_devices').get());
   await assertFails(dbFor(ADMIN_UID).ref(`notification_devices/${PASSENGER_UID}`).get());
   await assertFails(dbFor(ADMIN_UID).ref(`notification_consents/${PASSENGER_UID}`).get());
 });
 
 test('notification delivery indexes and server-mediated marketing-preference projection remain explicit', () => {
-  for (const requiredIndex of [
-    '"status", "availableAtMs", "completedAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs", "coalescingKey"',
-    '"jobId", "status", "availableAtMs", "receiptDueAtMs", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"',
-    '"status", "updatedAtMs", "severity"',
-    '"marketingPreferences/day_trips"',
-    '"categoryKey", "status", "expiresAtMs", "retentionDueAtMs", "updatedAtMs"',
-  ]) {
-    assert.ok(rules.includes(requiredIndex), `missing notification index: ${requiredIndex}`);
+  const parsed = JSON.parse(rules).rules;
+  for (const [root, indexes] of Object.entries({
+    notification_jobs_v2: ['status', 'availableAtMs', 'completedAtMs', 'expiresAtMs', 'retentionDueAtMs', 'updatedAtMs', 'coalescingKey'],
+    notification_delivery_attempts_v2: ['jobId', 'status', 'availableAtMs', 'receiptDueAtMs', 'expiresAtMs', 'retentionDueAtMs', 'updatedAtMs'],
+    notification_delivery_warnings_v2: ['status', 'updatedAtMs', 'severity'],
+    marketing_notification_details: ['categoryKey', 'status', 'expiresAtMs', 'retentionDueAtMs', 'updatedAtMs'],
+  })) {
+    for (const index of indexes) assert.ok(parsed[root]['.indexOn'].includes(index), `missing ${root} index ${index}`);
   }
+  assert.ok(rules.includes('"marketingPreferences/day_trips"'));
   assert.ok(rules.includes('"notification_devices"'));
   assert.ok(rules.includes('"notification_consents"'));
   assert.ok(rules.includes('"notification_retention"'));
@@ -410,4 +411,26 @@ test('legacy read-state migration requests are bound to the active canonical pri
     principalId: DRIVER_PRINCIPAL_KEY,
     requestedAtMs: Date.now(),
   }));
+});
+
+
+test('shared notice acknowledgement follows passenger-to-driver switch under the same Auth UID', async () => {
+  const { acknowledgeCurrentNotice } = require('../../services/notificationInboxService');
+  const uid = 'notice-role-switch'; const driverId = 'D-SWITCH';
+  let updates = passengerAuthorityUpdates({ uid, tourId: TOUR_ID });
+  const clientSession = raw => Object.fromEntries(['schemaVersion', 'sessionId', 'tourId', 'principalId', 'principalType', 'driverId', 'issuedAtMs', 'expiresAtMs', 'sessionRevision'].map(key => [key, raw[key] ?? null]));
+  let session = clientSession(updates[`app_sessions/${uid}`]);
+  await testEnv.withSecurityRulesDisabled(context => context.database(databaseURL).ref().update(updates));
+  const db = dbFor(uid);
+  const options = { getContext: () => ({ authUid: uid, appSession: session }), tourId: TOUR_ID,
+    noticeId: NOTICE_ID, db, auth: { currentUser: { uid } } };
+  await assertSucceeds(acknowledgeCurrentNotice(options));
+  const passengerPrincipal = session.principalId;
+  updates = driverAuthorityUpdates({ uid, driverId, tourId: TOUR_ID });
+  session = clientSession(updates[`app_sessions/${uid}`]);
+  await testEnv.withSecurityRulesDisabled(context => context.database(databaseURL).ref().update(updates));
+  await assertSucceeds(acknowledgeCurrentNotice(options));
+  await assertFails(db.ref(`notification_read_state/${TOUR_ID}/${passengerPrincipal}/${NOTICE_ID}`).set(Date.now()));
+  await assertFails(db.ref(`notification_read_state/${TOUR_ID}/${uid}/${NOTICE_ID}`).set(Date.now()));
+  await assertSucceeds(db.ref(`notification_read_state/${TOUR_ID}/${session.principalId}/${NOTICE_ID}`).get());
 });

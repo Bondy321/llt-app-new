@@ -30,7 +30,8 @@ const parseHost = () => {
 const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json'), 'utf8');
 let testEnv;
 let dbUrl;
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID
+  ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 const passengerSession = {
   schemaVersion: 1,
@@ -50,6 +51,10 @@ const replaceDriverSessionWithPassenger = async ({ policy = null, assigned = tru
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.database(dbUrl);
     await db.ref().update({
+      [`app_session_authority/${DRIVER_UID}`]: { schemaVersion: 1, epoch: 'd'.repeat(48), state: 'committed', sessionId: TRANSITIONED_PASSENGER_SESSION_ID },
+      'passenger_identity_security/BOOK-TRANSITION': { deviceAuthorizationVersion: 2,
+        passengerPrincipalId: TRANSITIONED_PASSENGER_PRINCIPAL_ID, authorizedAuthUids: { [DRIVER_UID]: true } },
+      'bookings/BOOK-TRANSITION': { tourId: TOUR_ID, loginEligible: true },
       [`app_sessions/${DRIVER_UID}`]: {
         schemaVersion: 1,
         sessionId: TRANSITIONED_PASSENGER_SESSION_ID,
@@ -70,6 +75,7 @@ const replaceDriverSessionWithPassenger = async ({ policy = null, assigned = tru
         stablePassengerKey: TRANSITIONED_PASSENGER_PRINCIPAL_ID,
         privatePhotoOwnerId: TRANSITIONED_PASSENGER_PRINCIPAL_ID,
         privatePhotoOwnerKey: TRANSITIONED_PASSENGER_PRINCIPAL_ID,
+        privatePhotoOwnerType: 'opaque_passenger',
         identityVersion: 'pax_v2',
         bookingRef: 'BOOK-TRANSITION',
         // These deliberately model the stale authority left by the pre-fix issuer.
@@ -109,7 +115,7 @@ const buildLocationPayload = ({
   appSessionId = DRIVER_SESSION_ID,
   driverId = DRIVER_ID,
   tourId = TOUR_ID,
-  liveSharingSessionId = 'live_session_1234',
+  liveSharingSessionId = 'track_session_1234',
   manual = false,
   overrides = {},
 } = {}) => ({
@@ -185,6 +191,15 @@ test.beforeEach(async () => {
   await testEnv.clearDatabase();
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.database(dbUrl).ref().update({
+      [`app_session_authority/${AUTH_UID}`]: { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: SESSION_ID },
+      [`app_session_authority/${DRIVER_UID}`]: { schemaVersion: 1, epoch: 'b'.repeat(48), state: 'committed', sessionId: DRIVER_SESSION_ID },
+      [`app_session_authority/${DRIVER_UID_B}`]: { schemaVersion: 1, epoch: 'b'.repeat(48), state: 'committed', sessionId: DRIVER_SESSION_ID_B },
+      'passenger_identity_security/BOOK-SESSION': { deviceAuthorizationVersion: 2,
+        passengerPrincipalId: PRINCIPAL_ID, authorizedAuthUids: { [AUTH_UID]: true } },
+      [`driver_staff_policy/${DRIVER_ID}`]: { schemaVersion: 1, generation: 'c'.repeat(48) },
+      [`driver_device_authorizations/${DRIVER_UID}`]: { schemaVersion: 1, state: 'active', driverId: DRIVER_ID, sessionId: DRIVER_SESSION_ID, generation: 'c'.repeat(48) },
+      [`driver_device_authorizations/${DRIVER_UID_B}`]: { schemaVersion: 1, state: 'active', driverId: DRIVER_ID, sessionId: DRIVER_SESSION_ID_B, generation: 'c'.repeat(48) },
+      [`driver_tour_pack_feature_flags/drivers/${DRIVER_ID}`]: true,
       [`app_sessions/${AUTH_UID}`]: passengerSession,
       [`users/${AUTH_UID}`]: {
         principalType: 'passenger',
@@ -192,6 +207,7 @@ test.beforeEach(async () => {
         stablePassengerKey: PRINCIPAL_ID,
         privatePhotoOwnerId: PRINCIPAL_ID,
         privatePhotoOwnerKey: PRINCIPAL_ID,
+        privatePhotoOwnerType: 'opaque_passenger',
         identityVersion: 'pax_v2',
         bookingRef: 'BOOK-SESSION',
       },
@@ -232,7 +248,7 @@ test.beforeEach(async () => {
         driverPrincipalId: `driver:${DRIVER_ID}`,
         driverAssignedTourId: TOUR_ID,
       },
-      [`drivers/${DRIVER_ID}`]: { authUid: DRIVER_UID, currentTourId: TOUR_ID, name: 'Driver' },
+      [`drivers/${DRIVER_ID}`]: { authUid: DRIVER_UID, authUidStaffGeneration: 'c'.repeat(48), currentTourId: TOUR_ID, name: 'Driver' },
       [`tour_manifests/${TOUR_ID}/assigned_drivers/${DRIVER_ID}`]: true,
       [`bookings/BOOK-SESSION`]: { tourId: TOUR_ID },
       [`tour_manifests/${TOUR_ID}/bookings/BOOK-SESSION`]: { status: 'PENDING' },
@@ -273,6 +289,17 @@ test.beforeEach(async () => {
       },
       'driver_login_policy/v1': policyRecord({ enforceSingleDevice: false, generation: 0 }),
     });
+    const starts = {};
+    for (const [uid, sid, liveIds] of [
+      [DRIVER_UID, DRIVER_SESSION_ID, ['track_session_1234', 'track_session_primary', 'track_policy_exact', 'track_assignment_fence', 'track_multi_device_a', 'track_owned_session']],
+      [DRIVER_UID_B, DRIVER_SESSION_ID_B, ['track_multi_device_b']],
+    ]) {
+      for (const liveSharingSessionId of liveIds) starts[`driver_tracking_sessions/${sid}|${liveSharingSessionId}`] = {
+        schemaVersion: 1, authUid: uid, appSessionId: sid, driverId: DRIVER_ID,
+        tourId: TOUR_ID, liveSharingSessionId, status: 'active', startedAtMs: NOW, expiresAtMs: EXPIRES,
+      };
+    }
+    await context.database(dbUrl).ref().update(starts);
   });
 });
 
@@ -296,6 +323,35 @@ test('active passenger session can read tour and photo metadata and write only i
   await assertSucceeds(db.ref(`chat_presence_sessions/group/${SESSION_ID}`).set(
     buildChatStatusPayload(),
   ));
+});
+
+test('prepared or superseded installation authority denies a retained otherwise-active passenger session', async () => {
+  const db = dbFor(AUTH_UID);
+  await assertSucceeds(db.ref(`tours/${TOUR_ID}/itinerary`).get());
+  for (const state of ['prepared', 'deletion_prepared', 'deleted']) {
+    await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(`app_session_authority/${AUTH_UID}/state`).set(state));
+    assert.equal((await db.ref(`app_sessions/${AUTH_UID}/status`).get()).val(), 'active');
+    await assertFails(db.ref(`tours/${TOUR_ID}/itinerary`).get());
+    await assertFails(db.ref(`chat_presence_sessions/group/${SESSION_ID}`).set(buildChatStatusPayload()));
+  }
+});
+
+test('staff revocation blocks current driver writes while retained session and assignment remain', async () => {
+  const db = dbFor(DRIVER_UID);
+  await assertSucceeds(db.ref(`tours/${TOUR_ID}`).get());
+  await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(`driver_device_authorizations/${DRIVER_UID}/state`).set('revoked'));
+  await assertFails(db.ref(`tours/${TOUR_ID}`).get());
+  await assertFails(db.ref(`driver_location_sessions/${DRIVER_SESSION_ID}|track_session_1234`).set(buildLocationPayload()));
+  await assertFails(db.ref(`tours/${TOUR_ID}/itinerary`).set({ title: 'Revoked' }));
+});
+
+test('new legacy automatic sources are denied but exact-owner retained-source cleanup stays available', async () => {
+  const sourcePath = `driver_location_sessions/${DRIVER_SESSION_ID}|loc_legacy_1234`;
+  const payload = buildLocationPayload({ liveSharingSessionId: 'loc_legacy_1234' });
+  await assertFails(dbFor(DRIVER_UID).ref(sourcePath).set(payload));
+  await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(sourcePath).set(payload));
+  await assertFails(dbFor(DRIVER_UID_B).ref(sourcePath).remove());
+  await assertSucceeds(dbFor(DRIVER_UID).ref(sourcePath).remove());
 });
 
 test('the same still-authenticated token loses every sensitive path when its app session is removed', async () => {
@@ -338,16 +394,16 @@ test('assigned driver needs the matching active session for operational access',
   await assertFails(dbFor(DRIVER_UID).ref('driver_tour_packs/departure-1').get());
 });
 
-test('a coherently assigned active driver session writes raw location and an unrevised legacy public location', async () => {
+test('an enrolled assigned active driver publishes only explicitly started source locations', async () => {
   const db = dbFor(DRIVER_UID);
-  const liveSharingSessionId = 'live_session_primary';
+  const liveSharingSessionId = 'track_session_primary';
   await assertSucceeds(db.ref(`driver_location_sessions/${DRIVER_SESSION_ID}|${liveSharingSessionId}`).set(
     buildLocationPayload({ liveSharingSessionId }),
   ));
   await assertFails(db.ref(`driver_location_pickups/${TOUR_ID}`).set(
     buildLocationPayload({ manual: true }),
   ));
-  await assertSucceeds(db.ref(`tours/${TOUR_ID}/driverLocation`).set({
+  await assertFails(db.ref(`tours/${TOUR_ID}/driverLocation`).set({
     latitude: 56.0, longitude: -4.5, timestamp: Date.now(),
   }));
   await assertSucceeds(db.ref(`tours/${TOUR_ID}/itinerary`).set({ title: 'Current driver itinerary' }));
@@ -358,7 +414,7 @@ test('a coherently assigned active driver session writes raw location and an unr
   await assertSucceeds(db.ref(actionPath).remove());
 });
 
-test('explicit cutover rejects 1.0.4 shared location, presence, and typing bridges', async () => {
+test('retired shared location, presence and typing bridges stay denied with absent and explicit cutover settings', async () => {
   const db = dbFor(DRIVER_UID);
   const driverPrincipalId = `driver:${DRIVER_ID}`;
   const legacyLocation = db.ref(`tours/${TOUR_ID}/driverLocation`);
@@ -369,11 +425,19 @@ test('explicit cutover rejects 1.0.4 shared location, presence, and typing bridg
     db.ref(`internal_chats/${TOUR_ID}/typing/${driverPrincipalId}`),
   ];
 
-  await assertSucceeds(legacyLocation.set({ latitude: 56, longitude: -4.5, timestamp: Date.now() }));
-  await assertSucceeds(legacyPaths[0].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
-  await assertSucceeds(legacyPaths[1].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
-  await assertSucceeds(legacyPaths[2].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
-  await assertSucceeds(legacyPaths[3].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
+  await assertFails(legacyLocation.set({ latitude: 56, longitude: -4.5, timestamp: Date.now() }));
+  await assertFails(legacyPaths[0].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
+  await assertFails(legacyPaths[1].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
+  await assertFails(legacyPaths[2].set({ name: 'Driver', isDriver: true, lastSeen: NOW, online: true }));
+  await assertFails(legacyPaths[3].set({ name: 'Driver', isDriver: true, timestamp: NOW }));
+  await testEnv.withSecurityRulesDisabled(async context => {
+    const db = context.database(dbUrl);
+    await db.ref(`tours/${TOUR_ID}/driverLocation`).set({ latitude: 56, longitude: -4.5, timestamp: NOW });
+    for (const scope of ['chats', 'internal_chats']) {
+      await db.ref(`${scope}/${TOUR_ID}/presence/${driverPrincipalId}`).set({ online: true });
+      await db.ref(`${scope}/${TOUR_ID}/typing/${driverPrincipalId}`).set({ name: 'Retained' });
+    }
+  });
 
   await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
     schemaVersion: 1,
@@ -388,7 +452,7 @@ test('explicit cutover rejects 1.0.4 shared location, presence, and typing bridg
 
 test('driver-only writes require a materialized policy and an exact session generation claim', async () => {
   const db = dbFor(DRIVER_UID);
-  const liveSharingSessionId = 'live_policy_exact';
+  const liveSharingSessionId = 'track_policy_exact';
   const locationPath = `driver_location_sessions/${DRIVER_SESSION_ID}|${liveSharingSessionId}`;
   const chatPath = `chat_presence_sessions/internal/${DRIVER_SESSION_ID}`;
   const actionPath = `driver_tour_pack_actions/departure-1/${DRIVER_ID}/schemaVersion`;
@@ -437,7 +501,7 @@ test('driver-only writes require a materialized policy and an exact session gene
 
 test('driver writes pause for an active assignment transition and resume after transitionId clears', async () => {
   const db = dbFor(DRIVER_UID);
-  const liveSharingSessionId = 'live_assignment_fence';
+  const liveSharingSessionId = 'track_assignment_fence';
   const locationPath = `driver_location_sessions/${DRIVER_SESSION_ID}|${liveSharingSessionId}`;
   const chatPath = `chat_presence_sessions/internal/${DRIVER_SESSION_ID}`;
   const actionPath = `driver_tour_pack_actions/departure-1/${DRIVER_ID}/schemaVersion`;
@@ -482,8 +546,8 @@ test('policy-off multi-device drivers can own separate raw location and chat lea
   });
 
   for (const [uid, appSessionId, liveSharingSessionId] of [
-    [DRIVER_UID, DRIVER_SESSION_ID, 'live_multi_device_a'],
-    [DRIVER_UID_B, DRIVER_SESSION_ID_B, 'live_multi_device_b'],
+    [DRIVER_UID, DRIVER_SESSION_ID, 'track_multi_device_a'],
+    [DRIVER_UID_B, DRIVER_SESSION_ID_B, 'track_multi_device_b'],
   ]) {
     const db = dbFor(uid);
     const principalId = `driver:${DRIVER_ID}`;
@@ -518,18 +582,18 @@ test('policy-off multi-device drivers can own separate raw location and chat lea
 test('raw location writes bind the exact session, driver, tour, key, schema, and owner deletion', async () => {
   const db = dbFor(DRIVER_UID);
   const otherDb = dbFor(DRIVER_UID_B);
-  const liveSharingSessionId = 'live_owned_session';
+  const liveSharingSessionId = 'track_owned_session';
   const sourcePath = `driver_location_sessions/${DRIVER_SESSION_ID}|${liveSharingSessionId}`;
 
   await assertFails(db.ref(`driver_location_sessions/${DRIVER_SESSION_ID}|wrong_live_key`).set(
     buildLocationPayload({ liveSharingSessionId }),
   ));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ appSessionId: DRIVER_SESSION_ID_B })));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ driverId: 'D-OTHER' })));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ tourId: OTHER_TOUR_ID })));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ overrides: { accuracy: null } })));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ overrides: { accuracy: 10001 } })));
-  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ overrides: { extra: true } })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, appSessionId: DRIVER_SESSION_ID_B })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, driverId: 'D-OTHER' })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, tourId: OTHER_TOUR_ID })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, overrides: { accuracy: null } })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, overrides: { accuracy: 10001 } })));
+  await assertFails(db.ref(sourcePath).set(buildLocationPayload({ liveSharingSessionId, overrides: { extra: true } })));
   await assertFails(dbFor(AUTH_UID).ref(`driver_location_sessions/${SESSION_ID}|${liveSharingSessionId}`).set(
     buildLocationPayload({ uid: AUTH_UID, appSessionId: SESSION_ID, liveSharingSessionId }),
   ));
@@ -637,9 +701,9 @@ test('server-owned profile session fence survives client leaf and parent writes'
   await assertFails(primaryAdmin.ref(`users/${AUTH_UID}`).update({ appSessionId: `sess_v1_${'f'.repeat(32)}` }));
   await assertSucceeds(owner.ref(`users/${AUTH_UID}/pushPermissionState`).set('denied'));
   assert.equal((await owner.ref(markerPath).get()).val(), SESSION_ID);
-  // Existing compatibility whole-profile deletion is intentionally preserved;
-  // removing the profile grants no authority and cannot recreate the marker.
-  await assertSucceeds(owner.ref(`users/${AUTH_UID}`).remove());
+  // Deletion is server-mediated; even trusted removal cannot recreate authority.
+  await assertFails(owner.ref(`users/${AUTH_UID}`).remove());
+  await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref(`users/${AUTH_UID}`).remove());
   await assertFails(owner.ref(markerPath).set(SESSION_ID));
 });
 

@@ -16,7 +16,9 @@ Module._load = function mocked(request, parent, isMain) {
   if (!parent?.filename.endsWith('driverLoginFunction.js')) return originalLoad(request, parent, isMain);
   if (request === 'firebase-functions/v2/https') return { onRequest: (_options, handler) => handler };
   if (request.endsWith('/bootstrap/firebaseAdmin')) return { admin: { database: () => context.db } };
-  if (request.endsWith('/bootstrap/legacyLibrary')) return { loadLegacyLibrary: () => sessions };
+  if (request.endsWith('/bootstrap/legacyLibrary')) return { loadLegacyLibrary: name => name === 'sessionPublicationAuthority'
+    ? { captureInstallationAuthority: async () => ({ epoch: null, value: null }) } : sessions };
+  if (request === './staffEnrolment') return { redeemStaffEnrolment: async () => ({ generation: 'c'.repeat(48), redemptionId: 'fixture-receipt' }) };
   if (request.endsWith('/auth/requestAuth')) return { verifyRequestAuthUid: async () => ({ success: true, uid: UID }) };
   if (request.endsWith('/logging/safeLogger')) return { log: { warn() {}, info() {}, error() {} } };
   if (request.endsWith('/app-sessions/public')) return {

@@ -47,7 +47,7 @@ messages retain the ordinary chat-owned path.
 
 | Class | Source and deterministic source ID | Audience and active session | Preference / sender | Lock-screen policy | Channel / priority | Expiry, collapse and grouping | Tap route and fallback | Job ID, retry and final state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Tour announcement | `broadcasts/{tourId}/{broadcastId}` / `tour_announcement:{tourId}:{broadcastId}` | Current tour passengers and assigned drivers; active app session required | `ops.driver_updates`; sender excluded | Admin title and bounded announcement preview; no booking/customer data | `llt_tour_updates_v2`, default | Admin expiry or 24h; no collapse; tag/thread by tour | `Chat` with `tourId`, deterministic announcement `messageId`, `noticeId`; durable tour notice | `notif_v1(sha256(source))`; temporary request/receipt retry; provider outcomes or `partial`, `no_recipients`, `expired` |
+| Tour announcement | `broadcasts/{tourId}/{broadcastId}` / `tour_announcement:{tourId}:{broadcastId}` | Current tour passengers and assigned drivers; active app session required | `ops.driver_updates`; sender excluded | Admin title and bounded announcement preview; no booking/customer data | `llt_tour_updates_v2`, default | Admin expiry or 24h; no collapse; tag/thread by tour | `Chat` with `tourId`, deterministic announcement `messageId`, `noticeId`; durable tour notice | `notif_v2(sha256(source))`; temporary request/receipt retry; provider outcomes or `partial`, `no_recipients`, `expired` |
 | Passenger group chat | `chats/{tourId}/messages/{messageId}` / `group_chat:{tourId}:{messageId}` | Current tour passengers and assigned drivers; active app session required | `ops.group_chat`; sender and duplicate token excluded | Sender name plus bounded text; no credentials | `llt_group_chat_v2`, default | 6h; distinct messages never collapse; tag/thread by tour | `Chat` with exact `tourId`, `messageId`, optional `noticeId`; in-app chat is fallback | Deterministic source hash; temporary retry; provider outcomes/partial/no recipients/expired |
 | Group photo | Secure schema-v2 image chat message / `group_photo:{tourId}:{messageId}:{photoId}` | Current tour passengers and assigned drivers; active app session required | `ops.group_photos`; sender and duplicate token excluded | “Shared a photo”; never contains or persists a media URL | `llt_group_photos_v2`, default | 6h; distinct photos never collapse; tag/thread by tour | `Chat` with exact message and `photoId`; chat/photo metadata fallback | Deterministic source hash; one upload/message creates at most one job; normal retry/final states |
 | Internal driver chat | `internal_chats/{tourId}/messages/{messageId}` / `internal_driver_chat:{tourId}:{messageId}` | Other coherently assigned drivers; active app session required | `ops.driver_updates`; sender excluded | Driver sender plus bounded text | `llt_driver_operations_v2`, high | 4h; distinct messages; tag/thread by tour | `Chat` with `internalDriverChat=true`, exact tour/message; internal chat fallback | Deterministic source hash; normal retry/final states |
@@ -64,6 +64,7 @@ messages retain the ordinary chat-owned path.
 - Jobs are server-owned schema version 1 records and contain bounded presentation/navigation data,
   never raw Expo tokens, credentials, names used as identity, or incident free text.
 - One source event maps to one deterministic job ID. Repeated Function delivery is idempotent.
+- Operational delivery uses the shared current-session validator at each candidate evaluation, including retry. Retained participant/device rows cannot authorize a transferred, cancelled or withdrawn booking, revoked staff approval, a changing driver policy, an assignment transition (including a false-valued marker), or a stale single-phone claim generation. Marketing consent and operations-admin safety escalation retain their separate audience contracts.
 - Leases, cursors, attempts, tickets, receipt state, subscriber indexes and retry metadata are
   client-write denied.
 - Existing-record queue/job/attempt transactions tolerate a cold Admin SDK cache: a provisional
@@ -95,10 +96,10 @@ messages retain the ordinary chat-owned path.
 - Account-deletion `privacy_deleted` jobs are content-free anti-recreation tombstones. Ordinary
   retention must not schedule them or shorten their explicit tombstone expiry; they become eligible
   only at that expiry.
-- Retention work is private and durable under `notification_retention/v1`. A due queue discovers work,
+- Retention work is private and durable under `notification_retention/v2`. A due queue discovers work,
   a leased job advances through bounded attempt pages and child/source cleanup phases, and every
   destructive page rereads the canonical notification job and exact rollout revision.
-- `notification_retention_rollout/v1` is the server-owned authority. Missing or malformed state means
+- `notification_retention_rollout/v2` is the server-owned authority. Missing or malformed state means
   fail-closed, non-destructive `legacy`; `paused` is the explicit operational stop phase. A shadow
   pass binds its aggregate fingerprint and revision; the first `compactor` revision
   remains paused with `canaryPassed=false`. A bounded canary binds its own fingerprint and revision,
@@ -152,18 +153,16 @@ proof for an ended/expired session when no different canonical session exists:
 mobile ends the session before sending notification logout. This preserves
 consented marketing or removes the token without consent; it cannot enable
 operational delivery or authorise stale registration/preferences.
-Clients without a supplied session ID retain supported marketing-only behaviour:
-the server derives any current owner, or writes ownerless state while logged out.
+Clients without a supplied session ID retain marketing-only behaviour only while
+logged out. An active canonical session requires its exact supplied session ID.
 Consent, permission and operational eligibility keep their separate checks.
 
 Registration holds both existing locks without advancing the canonical session
-revision. Device transactions compare the observed owner, and device, consent
-and audience transactions check the captured absolute lease deadline against a
-fresh clock at their mutation boundary. A paused registration cannot resume
-writes after lease takeover, including after the device commit but before its
-consent/audience projections. Consent and audience revisions also preserve newer
-registration projections. Partial projection work remains repairable through the
-existing already-applied registration retry.
+revision. One restricted publication updates device, consent and audience
+atomically. Server rules compare the operation, current installation authority,
+device/tombstone revisions and absolute expiry at arrival, including an SDK write
+queued offline before takeover. Already-applied retries retain the canonical
+registration revision and never recreate partial or superseded projections.
 
 Cleanup requires an exact `authoritySessionId`, or an exact legacy
 `operationalSessionId` when no ownership tag exists. Equality with a device
@@ -181,3 +180,90 @@ ownership tag; this existing RTDB rule boundary is unchanged.
 4. Repeat the server-pipeline test.
 5. If validation fails, disable enhanced security while retaining the server secret and investigate
    the visible `InvalidCredentials`/configuration warning. Never commit the token.
+
+
+## First public launch protocol (24 October 2026)
+
+New producers create schema-2 `notif_v2_` jobs and pin `audienceContract: indexed_v1`.
+All delivery jobs, attempts, recipient/token/audience claims, coalescing, previews,
+manual requeue work and runnable queues use distinct `_v2` private roots. Retention
+uses `notification_retention/v2` and `notification_retention_rollout/v2`. Public
+business sources, notification device ownership, consent and read state retain
+their existing roots. Older delivery roots are preserved, not assumed synthetic
+and not read by launch workers. Replayed old queue writes cannot enter new queues.
+Old deployed provider workers must still be stopped/drained before activation;
+namespace isolation is not evidence that an already-issued old provider request
+was cancelled. No shared-data reset is part of repository preparation.
+
+Attempt transitions compare generation, queue version, status and exact submission/
+retry owner in a transaction at one attempt. A durable `publicationPending` outbox
+records the prior pointer until the replacement pointer and accounting publish.
+Every recovery first resumes that publication. Delayed workers cannot overwrite a
+successor. Bounded preparation drains already-admitted siblings on error before
+relinquishing the page; no further candidates are admitted after failure.
+
+Accounting is internal exactly-once accounting, not exactly-once push display.
+Each of 256 job hash shards retains latest per-attempt version and contribution;
+a shard has a hard 1,024-attempt cap. Job transactions compare shard revisions and
+apply their aggregate differences once, with at most 256 summaries on the job.
+A crash or duplicate/older publication cannot add a phantom retry. The cap fails
+closed before provider submission and must alert rather than evict a receipt.
+After retention drains attempts it replaces accounting contents with 256 compact,
+permanent shard tombstones so late publishers cannot recreate recipient ledgers.
+
+Expo admission uses one project-shared RTDB budget across fanout and retries:
+500 messages across two adjacent one-second buckets, with marketing capped at 300
+and 200 reserved for operational traffic. At most 100 messages are sent per request.
+An ambiguous timeout or malformed/missing ticket is terminal `submission_unknown`;
+no automatic resend occurs. A ticket/receipt is not proof of display.
+
+Queue entries carry indexed `serviceKey = lane~paddedDueTime`. Recovery queries
+critical, operational and marketing lanes separately. Fanout recovery runs each
+minute with 30 entries (10/lane); receipt reconciliation runs each minute with 999
+entries (333/lane), and retries with 300 (100/lane). Receipt first-due remains 15
+minutes after ticket, within Expo's 24-hour receipt window. These are bounded work
+budgets, not certified cloud throughput; see the executable scale workload and
+`docs/performance/notification-launch-capacity.md`.
+
+Signed-in registration always supplies the exact current session, including an
+unassigned/ineligible driver. Ownership comes from committed server publication,
+not operational eligibility. Normal canonical session end precedes notification
+logout: exact `authoritySessionId` or an already-applied exact logout tag authorizes
+the reduction using stored consent. Untagged old devices do not acquire a special
+logout exception. Successor publication, deletion and tombstones dominate old
+requests. Consent-off logout retires the token; consent-on logout can retain
+marketing alone, and never operational authority.
+
+
+Current registration publication is atomic across the device, consent and all ten
+category membership leaves. `notification_mutation_authority/{uid}` captures a
+bounded operation manifest, exact installation epoch, existing device/tombstone
+revisions and absolute expiry. A separate limited-privilege Admin SDK connection
+must satisfy the root rules at server commit. Top-level internal issuer fields
+are not client custom claims. Already-dispatched offline writes cannot overwrite
+successor consent or recreate deleted delivery. Retry reads canonical authority;
+no partial-projection repair or legacy ownership promotion is needed.
+For active drivers, the arrival gate also checks current staff generation, login
+policy, single-device claim and exact assignment. Passenger publication captures
+the private booking reference, raw source tour and deletion-barrier key after
+normalizing the source against the current session tour. Arrival rechecks that
+source, eligibility, roster membership, private device authorization and exact
+participant session. Transfer, cancellation, staff revocation or assignment
+changes therefore fence queued work before a separate session cleanup completes.
+
+The accounting wire format uses a fixed seven-value vector in this order:
+`ticketAccepted, ticketRejected, receiptPending, receiptAccepted, receiptRejected,
+retrying, submissionUnknown`. Public job/source count names are unchanged. The
+vector avoids repeating long field names in each attempt and every bounded job
+summary. Reservation expiry is checked with a fresh provider clock immediately
+before dispatch; late budget acknowledgements consume capacity but cause safe
+retry without provider submission. Budget denial does not consume a retry attempt.
+
+Source delivery projections carry a monotonic sequence derived from bounded shard revisions plus audience progress. An older snapshot cannot overwrite later counters or terminal status merely because its wall clock is newer. Retry and manual requeue candidates use the same canonical indexed device, consent and membership revisions as first discovery; a removed device never falls back to a historical profile token.
+
+Job expiry, coalescing and availability rescheduling also compare the exact
+observed job in an existing-record transaction. They cannot recreate a removed
+job or overwrite a successor worker or retention fence. A replacement queue
+pointer is published before the previous pointer is retired. Terminal jobs keep
+the previous pointer until source publication and retention scheduling succeed;
+a stale-pointer replay completes that handoff before deleting its pointer.

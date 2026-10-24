@@ -1,5 +1,6 @@
 'use strict';
 
+const { unwrapReviewedAuthorityConstraints } = require('./reviewedRuleConstraints');
 const { constrainSourcePassengerRule, sourcePassengerRuleBoundaries } = require('./sourcePassengerScopeRules');
 
 const closesOuterGrantAt = (value, end) => {
@@ -43,6 +44,7 @@ const originalReviewedGrant = (value, currentPath) => {
   if (!boundary || typeof value !== 'string') return value;
   // This suffix is a reviewed AND constraint, never an alternate grant. Only
   // its exact template at an inventoried permission boundary can be excluded.
+  value = unwrapReviewedAuthorityConstraints(value);
   const suffix = constrainSourcePassengerRule('', boundary[2]).slice(1);
   if (!value.startsWith('(') || !value.endsWith(suffix)) return value;
   if (!closesOuterGrantAt(value, value.length - suffix.length)) return value;

@@ -25,6 +25,8 @@ const buildState = () => ({
   users: { [AUTH_UID]: { bookingRef: BOOKING_REF } },
   passenger_identity_security: { [BOOKING_REF]: {
     authorizedAuthUid: AUTH_UID,
+      deviceAuthorizationVersion: 2,
+      authorizedAuthUids: { [AUTH_UID]: true },
     passengerPrincipalId: PRINCIPAL_ID,
     passengerIdentityVersion: 'pax_v2',
     loginLocked: false,

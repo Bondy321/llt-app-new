@@ -82,6 +82,7 @@ Module._load = function load(request, parent, isMain) {
   if (request === '../firebase' || request === '../../firebase') {
     return {
       auth: authMock,
+      getCurrentAppCheckToken: async () => "synthetic-app-check",
       realtimeDb: realtimeDbMock,
     };
   }

@@ -43,7 +43,7 @@ const rules = fs.readFileSync(path.resolve(__dirname, '../../database.rules.json
 let testEnv;
 let dbUrl;
 
-const dbFor = (uid) => testEnv.authenticatedContext(uid).database(dbUrl);
+const dbFor = (uid) => testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(dbUrl);
 
 test('clients cannot forge or remove location publication fences through direct or parent tour writes', async () => {
   const fence = { driverLocationProjectionRevision: 7,
@@ -54,7 +54,7 @@ test('clients cannot forge or remove location publication fences through direct 
   try {
     const driver = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}`);
     const original = (await driver.get()).val();
-    await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ name: original.name }));
+    await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ name: original.name }));
     await assertSucceeds(driver.child('itinerary').set(original.itinerary));
     for (const patch of [
       { driverLocationProjectionRevision: 8 }, { driverLocationProjectionRevision: null },
@@ -246,57 +246,19 @@ test('denies passengers from writing driver-only tour location fields', async ()
   }));
 });
 
-test('keeps the 1.0.4 location bridge until explicit rollout cutover', async () => {
-  const liveSharingSessionId = 'location_assigned_123';
-  await assertSucceeds(
-    dbFor(DRIVER_AUTH_UID)
-      .ref(`driver_location_sessions/${sessionIdFor(DRIVER_AUTH_UID)}|${liveSharingSessionId}`)
-      .set(buildRawDriverLocation({ liveSharingSessionId })),
-  );
+test('legacy location bridges stay denied regardless of rollout metadata', async () => {
   const legacyLocationRef = dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/driverLocation`);
-  await assertSucceeds(legacyLocationRef.set({
-    schemaVersion: 1,
-    isSharing: true,
-    mode: 'pickup',
-    source: 'manual',
-    latitude: 56.0,
-    longitude: -4.6,
-    accuracy: 12,
-    timestamp: { '.sv': 'timestamp' },
-    updatedBy: 'Driver Palmer',
-  }));
-
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    const adminDb = context.database(dbUrl);
-    await adminDb.ref('live_state_rollout/v1').set({
-      schemaVersion: 1,
-      phase: 'compatibility',
-      revision: 1,
-      updatedAtMs: Date.now(),
-    });
-    await adminDb.ref(`tours/${TOUR_ID}/driverLocation/projectionRevision`).set(1);
-  });
-  await assertSucceeds(legacyLocationRef.set({
-    latitude: 56.01,
-    longitude: -4.61,
-    timestamp: { '.sv': 'timestamp' },
-  }));
-
-  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
-    schemaVersion: 1,
-    phase: 'cutover',
-    revision: 2,
-    updatedAtMs: Date.now(),
-  }));
-  await assertFails(legacyLocationRef.update({ timestamp: { '.sv': 'timestamp' } }));
-  await assertFails(legacyLocationRef.remove());
-
-  await testEnv.withSecurityRulesDisabled((context) => context.database(dbUrl).ref('live_state_rollout/v1').set({
-    schemaVersion: 1,
-    phase: 'compatibility',
-    revision: 3,
-    updatedAtMs: Date.now(),
-  }));
+  for (const phase of [null, 'compatibility', 'cutover']) {
+    await testEnv.withSecurityRulesDisabled(context => context.database(dbUrl).ref('live_state_rollout/v1').set(
+      phase ? { schemaVersion: 1, phase, revision: 1, updatedAtMs: Date.now() } : null,
+    ));
+    await assertFails(dbFor(DRIVER_AUTH_UID)
+      .ref(`driver_location_sessions/${sessionIdFor(DRIVER_AUTH_UID)}|location_assigned_123`)
+      .set(buildRawDriverLocation({ liveSharingSessionId: 'location_assigned_123' })));
+    await assertFails(legacyLocationRef.set({ latitude: 56, longitude: -4, timestamp: { '.sv': 'timestamp' } }));
+    await assertFails(legacyLocationRef.update({ timestamp: { '.sv': 'timestamp' } }));
+    await assertFails(legacyLocationRef.remove());
+  }
 
   await assertSucceeds(dbFor(DRIVER_AUTH_UID).ref(`tours/${TOUR_ID}/itinerary`).set({
     title: 'Client itinerary',
@@ -321,7 +283,15 @@ test('keeps the 1.0.4 location bridge until explicit rollout cutover', async () 
 
 test('validates v2 raw driver location records and accepts server timestamps', async () => {
   const appSessionId = sessionIdFor(DRIVER_AUTH_UID);
-  const liveSharingSessionId = 'location_schema_123';
+  const liveSharingSessionId = 'track_schema_123';
+  await testEnv.withSecurityRulesDisabled(async context => {
+    const db = context.database(dbUrl);
+    const session = (await db.ref(`app_sessions/${DRIVER_AUTH_UID}`).get()).val();
+    await dbFor(DRIVER_AUTH_UID).ref(`driver_tracking_sessions/${appSessionId}|${liveSharingSessionId}`).set({
+      schemaVersion: 1, authUid: DRIVER_AUTH_UID, appSessionId, driverId: DRIVER_ID, tourId: TOUR_ID,
+      liveSharingSessionId, status: 'active', startedAtMs: Date.now(), expiresAtMs: session.expiresAtMs,
+    });
+  });
   const locationRef = dbFor(DRIVER_AUTH_UID)
     .ref(`driver_location_sessions/${appSessionId}|${liveSharingSessionId}`);
 
@@ -454,45 +424,25 @@ test('versioned live sharing uses bounded coordinates, server time, and owner-on
   await assertSucceeds(ref.remove());
 });
 
-test('allows admin tour metadata management', async () => {
-  const safeCreateRef = dbFor(ADMIN_UID).ref('tours/SAFE_CREATE_1');
-  const safeCreation = await assertSucceeds(safeCreateRef.transaction(
-    (existing) => (existing === null ? {
-      name: 'Safe created tour',
-      tourCode: 'SAFE CREATE 1',
-      days: 1,
-      isActive: true,
-      maxParticipants: 53,
-      currentParticipants: 0,
-      pickupPoints: [],
-      itinerary: { title: 'Safe created tour', days: [] },
-    } : undefined),
-  ));
-  assert.equal(safeCreation.committed, true);
-
-  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/name`).set('Admin updated tour'));
-  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ isActive: false }));
-  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
-  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/driverId`).set('D-MISSING'));
+test('even MFA admins must use the server mutation endpoint for canonical tour metadata', async () => {
+  const admin = dbFor(ADMIN_UID);
+  await assertFails(admin.ref('tours/SAFE_CREATE_1').set({ name: 'Client created tour' }));
+  await assertFails(admin.ref(`tours/${TOUR_ID}/name`).set('Client updated tour'));
+  await assertFails(admin.ref(`tours/${TOUR_ID}`).update({ isActive: false }));
+  await assertFails(admin.ref(`tours/${TOUR_ID}/driverId`).set(DRIVER_ID));
   const startDateEpochMs = Date.UTC(2026, 7, 22);
-  const endDateEpochMs = Date.UTC(2026, 7, 24);
-  await assertSucceeds(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}`).update({ startDateEpochMs, endDateEpochMs }));
-  await assertFails(dbFor(ADMIN_UID).ref(`tours/${TOUR_ID}/endDateEpochMs`).set(startDateEpochMs - 1));
-  await assertSucceeds(
-    dbFor(ADMIN_UID).ref('tours')
-      .orderByChild('endDateEpochMs')
-      .startAt(startDateEpochMs)
-      .limitToFirst(500)
-      .get(),
-  );
+  await assertFails(admin.ref(`tours/${TOUR_ID}`).update({ startDateEpochMs, endDateEpochMs: Date.UTC(2026, 7, 24) }));
+  await assertFails(admin.ref(`tours/${TOUR_ID}`).remove());
+  await assertSucceeds(admin.ref('tours').orderByChild('endDateEpochMs').startAt(startDateEpochMs).limitToFirst(500).get());
 });
 
-test('allows hardcoded admin web console reads and safe root multi-path profile updates', async () => {
+test('allows MFA admin reads and profile updates but rejects mixed canonical tour updates', async () => {
   await assertSucceeds(dbFor(ADMIN_UID).ref('tours').get());
   await assertSucceeds(dbFor(ADMIN_UID).ref('drivers').get());
   await assertSucceeds(dbFor(ADMIN_UID).ref('tour_manifests').get());
 
-  await assertSucceeds(dbFor(ADMIN_UID).ref().update({
+  await assertSucceeds(dbFor(ADMIN_UID).ref(`drivers/${DRIVER_ID}/phone`).set('07123 456789'));
+  await assertFails(dbFor(ADMIN_UID).ref().update({
     [`drivers/${DRIVER_ID}/phone`]: '07123 456789',
     [`tours/${TOUR_ID}/name`]: 'Safe tour metadata',
   }));

@@ -92,7 +92,7 @@ const readTerminalRepairCursor = (value) => {
 };
 
 const loadTerminalRepairPage = async ({ db, nowMs, limit, cursor, metrics }) => {
-  let query = db.ref('notification_jobs').orderByChild('completedAtMs');
+  let query = db.ref('notification_jobs_v2').orderByChild('completedAtMs');
   const supportsStartAfter = cursor && typeof query.startAfter === 'function';
   if (supportsStartAfter) query = query.startAfter(cursor.completedAtMs, cursor.key);
   else if (cursor && typeof query.startAt === 'function') {
@@ -174,7 +174,7 @@ const readOrphanCursor = (value) => {
 };
 
 const loadOrphanAttemptPage = async ({ db, nowMs, limit, cursor, metrics }) => {
-  let query = db.ref('notification_delivery_attempts').orderByChild('retentionDueAtMs');
+  let query = db.ref('notification_delivery_attempts_v2').orderByChild('retentionDueAtMs');
   const supportsStartAfter = cursor && typeof query.startAfter === 'function';
   if (supportsStartAfter) {
     query = query.startAfter(cursor.retentionDueAtMs, cursor.key);
@@ -208,7 +208,7 @@ const withoutOrphanClaim = (attempt) => {
 const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, leaseMs, metrics }) => {
   let claimed = null;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
+    db.ref(`notification_delivery_attempts_v2/${attemptId}`), (current) => {
     if (!exactAttemptMatches(current, expected)) return undefined;
     if (current.retentionOrphanClaim
       && current.retentionOrphanClaim.claimId !== claimId
@@ -225,7 +225,7 @@ const claimOrphanAttempt = async ({ db, attemptId, expected, claimId, nowMs, lea
 };
 const releaseOrphanAttempt = async ({ db, attemptId, claimId, metrics }) => {
   await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_delivery_attempts/${attemptId}`),
+    db.ref(`notification_delivery_attempts_v2/${attemptId}`),
     (current) => current?.retentionOrphanClaim?.claimId === claimId
       ? withoutOrphanClaim(current) : undefined,
   );
@@ -233,7 +233,7 @@ const releaseOrphanAttempt = async ({ db, attemptId, claimId, metrics }) => {
 };
 const restoreOrphanAttempt = async ({ db, attemptId, expected, claimId, metrics }) => {
   const clean = withoutOrphanClaim(expected);
-  await db.ref(`notification_delivery_attempts/${attemptId}`).transaction((current) => {
+  await db.ref(`notification_delivery_attempts_v2/${attemptId}`).transaction((current) => {
     if (!current) return clean;
     if (current.retentionOrphanClaim?.claimId === claimId) return withoutOrphanClaim(current);
     return current;
@@ -262,7 +262,7 @@ const compareDeleteAttemptQueuePointer = async ({ db, attemptId, attempt, metric
 const deleteClaimedOrphanAttempt = async ({
   db, attemptId, expected, claimId, nowMs, metrics,
 }) => {
-  const parentBefore = (await db.ref(`notification_jobs/${expected.jobId}`).once('value')).val();
+  const parentBefore = (await db.ref(`notification_jobs_v2/${expected.jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parentBefore) {
     await releaseOrphanAttempt({ db, attemptId, claimId, metrics });
@@ -270,7 +270,7 @@ const deleteClaimedOrphanAttempt = async ({
   }
   let deleted = false;
   const result = await transactionWithAuthoritativeExistingValue(
-    db.ref(`notification_delivery_attempts/${attemptId}`), (current) => {
+    db.ref(`notification_delivery_attempts_v2/${attemptId}`), (current) => {
     if (!exactAttemptMatches(current, expected)
       || current.retentionOrphanClaim?.claimId !== claimId
       || Number(current.retentionDueAtMs || 0) > nowMs) return undefined;
@@ -280,7 +280,7 @@ const deleteClaimedOrphanAttempt = async ({
   );
   metrics.transactions += 1;
   if (!deleted || !result?.committed) return false;
-  const parentAfter = (await db.ref(`notification_jobs/${expected.jobId}`).once('value')).val();
+  const parentAfter = (await db.ref(`notification_jobs_v2/${expected.jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parentAfter) {
     await restoreOrphanAttempt({ db, attemptId, expected, claimId, metrics });
@@ -297,7 +297,7 @@ const processOrphanAttempt = async ({ db, attemptId, expected, nowMs, budgets, m
     metrics.orphanAttemptsMalformed += 1;
     return false;
   }
-  const parent = (await db.ref(`notification_jobs/${expected.jobId}`).once('value')).val();
+  const parent = (await db.ref(`notification_jobs_v2/${expected.jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parent) return false;
   const claimId = `orphan_claim_${randomUUID().replace(/-/gu, '')}`;
@@ -370,7 +370,7 @@ const sweepOrphanAttempts = async ({ db, nowMs, budgets, metrics, canContinue })
 const deleteOrphanMarketingDetail = async ({ db, detailId, expected, nowMs, metrics }) => {
   const jobId = expected?.deliveryJobId || expected?.notificationDeliveryJobId;
   if (typeof jobId !== 'string' || !jobId) return false;
-  const parent = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const parent = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parent) return false;
   let deleted = false;
@@ -386,7 +386,7 @@ const deleteOrphanMarketingDetail = async ({ db, detailId, expected, nowMs, metr
   );
   metrics.transactions += 1;
   if (!deleted || !result?.committed) return false;
-  const parentAfter = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+  const parentAfter = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
   metrics.queries += 1;
   if (parentAfter) {
     await db.ref(`marketing_notification_details/${detailId}`).transaction((current) => current || expected);
@@ -550,7 +550,7 @@ const runAuxiliarySweeps = async ({
   }
   results.push(await runExactExpirySweep({
     db,
-    root: 'notification_audience_previews',
+    root: 'notification_audience_previews_v2',
     orderField: 'expiresAtMs',
     nowMs,
     limit: budgets.auxiliaryPageSize,
@@ -565,7 +565,7 @@ const runAuxiliarySweeps = async ({
   }
   results.push(await runExactExpirySweep({
     db,
-    root: 'notification_requeue_jobs',
+    root: 'notification_requeue_jobs_v2',
     orderField: 'expiresAtMs',
     nowMs,
     limit: budgets.auxiliaryPageSize,

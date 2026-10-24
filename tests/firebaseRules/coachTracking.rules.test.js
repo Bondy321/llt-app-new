@@ -24,7 +24,7 @@ function parseEmulator() {
   return { host, port: Number(portText) };
 }
 
-function dbFor(uid) { return testEnv.authenticatedContext(uid).database(databaseURL); }
+function dbFor(uid) { return testEnv.authenticatedContext(uid, uid === ADMIN_UID ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(databaseURL); }
 
 test.before(async () => {
   const emulator = parseEmulator();
@@ -50,6 +50,8 @@ test.after(async () => { await testEnv?.cleanup(); });
 test('coach tracking rows and readiness are readable only by operations admins', async () => {
   for (const pathName of ['admin_dashboard/v1/coach_tracking', 'admin_dashboard/v1/coach_tracking_status']) {
     await assertFails(dbFor(PASSENGER_UID).ref(pathName).get());
+    await assertFails(testEnv.authenticatedContext(ADMIN_UID).database(databaseURL).ref(pathName).get());
+    await assertFails(testEnv.authenticatedContext(ADMIN_UID, { firebase: { sign_in_second_factor: 'phone' } }).database(databaseURL).ref(pathName).get());
     await assertSucceeds(dbFor(ADMIN_UID).ref(pathName).get());
   }
 });
@@ -88,7 +90,7 @@ test('real web subscription reflects fresh publication, Stop and assignment chan
   const app = appApi.initializeApp({ projectId: PROJECT_ID, databaseURL }, `coach-web-test-${Date.now()}`);
   const client = databaseApi.getDatabase(app);
   const { host, port } = parseEmulator();
-  databaseApi.connectDatabaseEmulator(client, host, port, { mockUserToken: { sub: ADMIN_UID, user_id: ADMIN_UID } });
+  databaseApi.connectDatabaseEmulator(client, host, port, { mockUserToken: { sub: ADMIN_UID, user_id: ADMIN_UID, firebase: { sign_in_second_factor: 'totp' } } });
   const now = Date.now();
   await trusted(db => db.ref().update({
     'tours/COACH_TOUR': { name: 'Coach integration tour', tourCode: 'COACH_TOUR', isActive: true,

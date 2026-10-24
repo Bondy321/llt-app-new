@@ -93,7 +93,7 @@ const buildDriverSessionRecord = ({
   authUid,
   driverId,
   tourId = null,
-  driverLoginPolicyGeneration = 0,
+  driverLoginPolicyGeneration,
   sessionId = createAppSessionId(),
   nowMs = Date.now(),
   expiresAtMs = calculateSessionExpiry({ principalType: 'driver', tourId, nowMs }),
@@ -156,9 +156,8 @@ const isActiveSessionRecord = (session, { nowMs = Date.now() } = {}) => {
   if (session.principalType === 'driver') {
     return isValidFirebaseKey(session.driverId)
       && isValidDriverPrincipal(session.principalId, session.driverId)
-      && (!Object.prototype.hasOwnProperty.call(session, 'driverLoginPolicyGeneration')
-        || (Number.isSafeInteger(session.driverLoginPolicyGeneration)
-          && session.driverLoginPolicyGeneration >= 0))
+      && Number.isSafeInteger(session.driverLoginPolicyGeneration)
+      && session.driverLoginPolicyGeneration >= 0
       && (session.tourId === null || session.tourId === undefined || isValidFirebaseKey(session.tourId));
   }
   return false;

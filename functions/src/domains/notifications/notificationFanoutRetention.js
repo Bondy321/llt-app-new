@@ -4,7 +4,7 @@
 
 const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
 
-const { removeClaimedQueueEntry, releaseClaimedQueueEntry } = require('./notificationQueues');
+const { removeClaimedQueueEntry, releaseClaimedQueueEntry, transitionQueuedRecord } = require('./notificationQueues');
 const { finalizeCompletedFanout } = require('./notificationFanoutFinalization');
 const {
   isNotificationLifecycleRetentionFenced,
@@ -45,6 +45,23 @@ const clearCompletedFanoutPointer = (jobRef, queueKey, nowMs) => transactExistin
   return { ...current, queueKind: null, queueKey: null, queueVersion: Number(current.queueVersion || 0) + 1 };
 });
 
+const expireLeasedNotificationJob = async ({ db, jobRef, job, leaseOwnerId, nowMs, syncSourceStatus, publishCriticalWarning }) => {
+  const fenced = { status: 'retention_fenced', fanoutComplete: false, replayed: true };
+  if (!(await renewNotificationJobSubmissionFence({
+    jobRef, leaseOwnerId, nowMs, requiredStatus: 'fanout_in_progress',
+  }))) return fenced;
+  const renewedJob = (await jobRef.once('value')).val();
+  if (!renewedJob || renewedJob.status !== 'fanout_in_progress'
+    || (leaseOwnerId && renewedJob.lease?.ownerId !== leaseOwnerId)
+    || isNotificationLifecycleRetentionFenced(renewedJob, nowMs)) return fenced;
+  const completedAtMs = Number(job.completedAtMs || nowMs);
+  const patch = { status: 'expired', lease: null, completedAtMs, updatedAtMs: nowMs };
+  await transitionQueuedRecord(db, { targetPath: `notification_jobs_v2/${job.jobId}`,
+    current: renewedJob, patch, targetId: job.jobId });
+  await finalizeAndScheduleCompletedFanout(db, { ...renewedJob, ...patch }, nowMs, syncSourceStatus, publishCriticalWarning);
+  return { status: 'expired', fanoutComplete: true };
+};
+
 const settleCompletedFanoutQueue = async ({ jobRef, queueRef, queueKey, queueOwnerId, nowMs }) => {
   const current = (await jobRef.once('value')).val();
   if (isNotificationLifecycleRetentionFenced(current, nowMs)) {
@@ -59,6 +76,7 @@ const settleCompletedFanoutQueue = async ({ jobRef, queueRef, queueKey, queueOwn
 };
 
 module.exports = {
+  expireLeasedNotificationJob,
   finalizeAndScheduleCompletedFanout,
   renewNotificationJobSubmissionFence,
   settleCompletedFanoutQueue,

@@ -4,12 +4,20 @@
 
 const { isTerminalNotificationJobStatus } = require('./notificationJobStatus');
 
+const projectionSequence = job => Object.values(job.attemptAccounting || {}).reduce(
+  (sum, shard) => sum + Number(shard.revision || 0), Number(job.counts?.audience || 0));
+const statusRank = status => isTerminalNotificationJobStatus(status) ? 4
+  : status === 'receipt_pending' ? 3 : status === 'retrying' ? 2 : status === 'fanout_in_progress' ? 1 : 0;
+const projectedStatus = value => value.deliveryStatus || value.notificationDeliveryStatus || value.notificationStatus;
+const projectionTime = value => Number(value.deliveryUpdatedAtMs || value.notificationUpdatedAtMs || 0);
+
 const buildDelivery = (job, nowMs) => {
   const counts = job.counts || {};
   const providerAccepted = Number(counts.receiptAccepted || 0);
   const rejected = Number(counts.receiptRejected || 0) + Number(counts.ticketRejected || 0);
   const submissionUnknown = Number(counts.submissionUnknown || 0);
   const delivery = {
+    deliverySequence: projectionSequence(job),
     deliveryStatus: job.status,
     deliveryJobId: job.jobId,
     deliveryUpdatedAtMs: nowMs,
@@ -32,16 +40,22 @@ const guardedDeliveryMerge = (ref, jobId, patch) => ref.transaction((current) =>
   if (!current) return current;
   if (current.deliveryJobId && current.deliveryJobId !== jobId) return current;
   if (current.notificationDeliveryJobId && current.notificationDeliveryJobId !== jobId) return current;
-  if (Number(current.deliveryUpdatedAtMs || current.notificationUpdatedAtMs || 0)
-    > Number(patch.deliveryUpdatedAtMs || patch.notificationUpdatedAtMs || 0)) return current;
+  const previousSequence = Number(current.deliverySequence || 0);
+  const nextSequence = Number(patch.deliverySequence || 0);
+  if (nextSequence < previousSequence) return current;
+  if (nextSequence === previousSequence) {
+    const rank = statusRank(projectedStatus(patch)) - statusRank(projectedStatus(current));
+    if (rank < 0 || (rank === 0 && projectionTime(current) > projectionTime(patch))) return current;
+  }
   const completedAtMs = current.deliveryCompletedAtMs && patch.deliveryCompletedAtMs
     ? Math.min(Number(current.deliveryCompletedAtMs), Number(patch.deliveryCompletedAtMs))
     : (current.deliveryCompletedAtMs || patch.deliveryCompletedAtMs);
   return { ...current, ...patch, ...(completedAtMs ? { deliveryCompletedAtMs: completedAtMs } : {}) };
 });
 const syncBroadcastStatus = (db, job, delivery, _nowMs) => guardedDeliveryMerge(db.ref(`broadcasts/${job.tourId}/${job.navigation.messageId}`), job.jobId, delivery);
-const syncMarketingStatus = (db, job, delivery, nowMs) => Promise.all([guardedDeliveryMerge(db.ref(`category_broadcasts/${job.categoryKey}/${job.navigation.broadcastId}`), job.jobId, delivery), guardedDeliveryMerge(db.ref(`marketing_notification_details/${job.navigation.broadcastId}`), job.jobId, { deliveryStatus: job.status, updatedAtMs: nowMs })]);
+const syncMarketingStatus = (db, job, delivery, nowMs) => Promise.all([guardedDeliveryMerge(db.ref(`category_broadcasts/${job.categoryKey}/${job.navigation.broadcastId}`), job.jobId, delivery), guardedDeliveryMerge(db.ref(`marketing_notification_details/${job.navigation.broadcastId}`), job.jobId, { deliveryJobId: job.jobId, deliverySequence: delivery.deliverySequence, deliveryStatus: job.status, deliveryUpdatedAtMs: nowMs, updatedAtMs: nowMs })]);
 const syncPackStatus = (db, job, delivery, nowMs) => guardedDeliveryMerge(db.ref(`driver_tour_pack_changes/${job.departureKey}/latest`), job.jobId, {
+      deliverySequence: delivery.deliverySequence,
       notificationStatus: job.status,
       notificationRecipientCount: delivery.recipientCount,
       notificationTicketAcceptedCount: delivery.ticketAcceptedCount,
@@ -56,6 +70,7 @@ const syncPackStatus = (db, job, delivery, nowMs) => guardedDeliveryMerge(db.ref
       deliveryJobId: job.jobId,
     });
 const buildSafetyDeliveryUpdate = (job, delivery, nowMs) => ({
+      deliverySequence: delivery.deliverySequence,
       notificationDeliveryStatus: job.status,
       notificationDeliveryJobId: job.jobId,
       notificationRecipientCount: delivery.recipientCount,

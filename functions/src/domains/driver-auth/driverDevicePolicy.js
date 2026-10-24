@@ -362,7 +362,7 @@ const releaseDriverLoginClaim = async ({ db, driverId, admissionId }) => {
 const driverSessionMatchesPolicyGeneration = (session, policy) => {
   const sessionGeneration = Number.isSafeInteger(session?.driverLoginPolicyGeneration)
     ? session.driverLoginPolicyGeneration
-    : 0;
+    : -1;
   return sessionGeneration === policy.generation;
 };
 

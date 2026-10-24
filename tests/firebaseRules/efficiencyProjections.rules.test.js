@@ -25,7 +25,7 @@ function parseEmulator() {
 }
 
 function dbFor(uid) {
-  return testEnv.authenticatedContext(uid).database(databaseURL);
+  return testEnv.authenticatedContext(uid, [PRIMARY_ADMIN_UID, DIRECTORY_ADMIN_UID].includes(uid) ? { firebase: { sign_in_second_factor: 'totp' } } : {}).database(databaseURL);
 }
 
 test.before(async () => {

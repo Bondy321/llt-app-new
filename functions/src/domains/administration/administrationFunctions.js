@@ -10,8 +10,8 @@ const { acquireManualBookingLock, releaseManualBookingLock } = require('../../in
 const { isValidFirebaseKey } = require('../../infrastructure/database/firebaseKey');
 const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { checkRateLimit, getRequestClientKey } = require('../../infrastructure/rate-limit/requestRateLimiter');
-const { deleteStoragePaths, deleteStoragePrefixes } = require('../../infrastructure/storage/storageDeletion');
+const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+const { deleteStoragePrefixes } = require('../../infrastructure/storage/storageDeletion');
 const { normalizeTourKeyForComparison, resolveTrimmedString } = require('../../infrastructure/validation/stringNormalization');
 const { verifyOperationsAdminAccess } = require('./adminAuthorization');
 const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
@@ -20,7 +20,9 @@ const {
   acquireManualSourceRosterLease, normalizeBookingRef, normalizeManualPassengerPayload,
   releaseManualSourceRosterLease, renewManualSourceRosterLease,
 } = require('./manualPassengerBooking');
-const { buildTourDeletionUpdates, getBookingsForTour, resolveReportedPhotoStoragePaths } = require('./tourDeletion');
+const { buildTourDeletionUpdates, getBookingsForTour } = require('./tourDeletion');
+const { commitTourPublication } = require('./tourPublication');
+const { drainTourMediaForDeletion, deleteOwnedGroupPhotoRecord, cleanupMediaUploadOperation } = require('../media/public');
 
 const {
   acquireDriverLocationProjectionInvalidation,
@@ -101,11 +103,14 @@ const authorizeAdminMutation = async ({ req, res, rateLimit }) => {
   if (!requestAuth.success) {
     return { allowed: false, response: res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' }) };
   }
+  if (requestAuth.claims?.firebase?.sign_in_second_factor !== 'totp') {
+    return { allowed: false, response: res.status(403).json({ success: false, reason: 'ADMIN_MFA_REQUIRED' }) };
+  }
   const db = admin.database();
   if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db }))) {
     return { allowed: false, response: res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' }) };
   }
-  if (rateLimit && !rateLimit(requestAuth.uid)) {
+  if (rateLimit && !(await rateLimit(requestAuth.uid))) {
     return { allowed: false, response: res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' }) };
   }
   return { allowed: true, authUid: String(requestAuth.uid), db };
@@ -188,12 +193,11 @@ const createManualPassengerBooking = onRequestWithResult(
     maxInstances: 10,
   },
   async (/** @type {any} */ req, /** @type {any} */ res) => {
-    const clientKey = getRequestClientKey(req);
     const access = await authorizeAdminMutation({
       req,
       res,
       rateLimit: (/** @type {string} */ authUid) => (
-        checkRateLimit(`create_manual_passenger_${authUid}_${clientKey}`, 20, 60000)
+        checkDistributedRequestLimit({ req, authUid, action: 'manual_passenger', maxRequests: 20 })
       ),
     });
     if (!access.allowed) return access.response;
@@ -245,7 +249,7 @@ const createManualPassengerBooking = onRequestWithResult(
         actorUid: authUid,
       });
       await renewManualPassengerMutationFence({ db, tourId: requestedTourId, owner: lockOwner });
-      await db.ref().update(writePlan.updates);
+      await commitTourPublication({ db, tourIds: [requestedTourId], bookingRefs: [normalized.bookingRef], owner: lockOwner, updates: writePlan.updates });
 
       log.info('Manual passenger booking created', {
         authUid,
@@ -309,6 +313,31 @@ const createManualPassengerBooking = onRequestWithResult(
   },
 );
 
+const buildDeletingLifecycle = previous => ({ state: 'deleting', generation: previous.generation || randomUUID(),
+  requestedAtMs: previous.requestedAtMs || Date.now(),
+  ...(previous.storageCleanup ? { storageCleanup: previous.storageCleanup } : {}) });
+
+const readTourDeletionPlan = async ({ db, tourId }) => {
+  const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot, locationSourcesSnapshot] = await Promise.all([
+    db.ref(`tours/${tourId}`).once('value'), db.ref('drivers').once('value'),
+    db.ref('users').orderByChild('driverAssignedTourId').equalTo(tourId).once('value'),
+    db.ref('content_reports').once('value'), db.ref('globalSafetyAlerts').once('value'),
+    db.ref('driver_location_sessions').orderByChild('tourId').equalTo(tourId).once('value'),
+  ]);
+  const tour = tourSnapshot.val() || {};
+  const bookings = await getBookingsForTour({ db, tourId, tourCode: tour.tourCode || tourId });
+  return { tourExisted: tourSnapshot.exists(), bookings, updates: buildTourDeletionUpdates({
+    tourId, bookings, drivers: driversSnapshot.val() || {}, driverUsers: driverUsersSnapshot.val() || {},
+    contentReports: reportsSnapshot.val() || {}, globalSafetyAlerts: safetySnapshot.val() || {},
+    driverLocationSourceKeys: Object.keys(locationSourcesSnapshot.val() || {}),
+  }) };
+};
+
+const deletionErrorResponse = (res, error) => {
+  const pending = error?.code === 'STORAGE_CLEANUP_PENDING';
+  return res.status(pending ? 409 : 500).json({ success: false, reason: pending ? 'STORAGE_CLEANUP_PENDING' : 'INTERNAL_ERROR' });
+};
+
 const deleteTourData = onRequestWithResult(
   {
     region: 'europe-west1',
@@ -339,7 +368,19 @@ const deleteTourData = onRequestWithResult(
     let locationInvalidation = null;
     let assignmentTourLockAcquired = false;
     let assignmentTourLockPath = null;
+    let sourceLeaseAcquired = false;
     try {
+      sourceLeaseAcquired = await acquireManualSourceRosterLease({ db, tourId, owner: lockOwner, allowDeleting: true, allowDeleted: true });
+      if (!sourceLeaseAcquired) return res.status(409).json({ success: false, reason: 'ROSTER_SYNC_IN_PROGRESS' });
+      const lifecycleSnapshot = await db.ref(`sync_roster_control/${tourId}/lifecycle`).once('value');
+      const previousLifecycle = lifecycleSnapshot.val() || {};
+      if (previousLifecycle.state === 'deleted' && !(await db.ref(`tours/${tourId}`).once('value')).exists()) {
+        return res.status(200).json({ success: true, tourId, alreadyDeleted: true,
+          summary: { bookingsDeleted: 0, storageObjectsDeleted: 0, databasePathsDeleted: 0, alreadyDeleted: true } });
+      }
+      const lifecycle = buildDeletingLifecycle(previousLifecycle);
+      await commitTourPublication({ db, tourIds: [tourId], owner: lockOwner,
+        updates: { [`sync_roster_control/${tourId}/lifecycle`]: lifecycle } });
       const fences = await acquireTourDeletionFences({ db, tourId, lockOwner });
       assignmentTourLockAcquired = fences.acquired;
       assignmentTourLockPath = fences.assignmentTourLockPath;
@@ -348,49 +389,42 @@ const deleteTourData = onRequestWithResult(
       // A repeat request cannot reserve a public fence on an absent tour. It is
       // already complete: do not create a tour or broadly delete data that a
       // concurrently recreated departure might now own.
-      if (fences.tourMissing) return res.status(200).json({
+      if (fences.tourMissing) {
+        await commitTourPublication({ db, tourIds: [tourId], owner: lockOwner,
+          updates: { [`sync_roster_control/${tourId}/lifecycle`]: { ...lifecycle, state: 'deleted', completedAtMs: Date.now() } } });
+        return res.status(200).json({
         success: true, tourId, alreadyDeleted: true,
         summary: { bookingsDeleted: 0, storageObjectsDeleted: 0, databasePathsDeleted: 0, alreadyDeleted: true },
-      });
-      const [tourSnapshot, driversSnapshot, driverUsersSnapshot, reportsSnapshot, safetySnapshot, locationSourcesSnapshot] = await Promise.all([
-        db.ref(`tours/${tourId}`).once('value'),
-        db.ref('drivers').once('value'),
-        db.ref('users').orderByChild('driverAssignedTourId').equalTo(tourId).once('value'),
-        db.ref('content_reports').once('value'),
-        db.ref('globalSafetyAlerts').once('value'),
-        db.ref('driver_location_sessions').orderByChild('tourId').equalTo(tourId).once('value'),
-      ]);
-      const tourExisted = tourSnapshot.exists();
-      const tour = tourSnapshot.val() || {};
-      const bookings = await getBookingsForTour({ db, tourId, tourCode: tour.tourCode || tourId });
-      const updates = buildTourDeletionUpdates({
-        tourId,
-        bookings,
-        drivers: driversSnapshot.val() || {},
-        driverUsers: driverUsersSnapshot.val() || {},
-        contentReports: reportsSnapshot.val() || {},
-        globalSafetyAlerts: safetySnapshot.val() || {},
-        driverLocationSourceKeys: Object.keys(locationSourcesSnapshot.val() || {}),
-      });
+        });
+      }
+      const { tourExisted, bookings, updates } = await readTourDeletionPlan({ db, tourId });
+      await drainTourMediaForDeletion({ db, bucket: admin.storage().bucket(), tourId,
+        beforeRecord: () => renewManualPassengerMutationFence({ db, tourId, owner: lockOwner }) });
       const deletedStorageObjects = await deleteStoragePrefixes({
         prefixes: [`group_tour_photos/${tourId}/`, `private_tour_photos/${tourId}/`],
+        cursor: lifecycle.storageCleanup || null,
+        onProgress: async cursor => {
+          await commitTourPublication({ db, tourIds: [tourId], owner: lockOwner,
+            updates: { [`sync_roster_control/${tourId}/lifecycle/storageCleanup`]: cursor } });
+          lifecycle.storageCleanup = cursor;
+        },
+        beforePage: () => renewManualPassengerMutationFence({ db, tourId, owner: lockOwner }),
       });
-      const projectionStatePath = `driver_location_projection_state/${tourId}`;
-      delete updates[projectionStatePath];
-      await db.ref().update(updates);
-      await db.ref(projectionStatePath).remove();
+      updates[`sync_roster_control/${tourId}/lifecycle`] = { ...lifecycle, state: 'deleted', completedAtMs: Date.now() };
+      await renewManualPassengerMutationFence({ db, tourId, owner: lockOwner });
+      await commitTourPublication({ db, tourIds: [tourId], bookingRefs: Object.keys(bookings), owner: lockOwner, updates });
 
       const summary = {
         bookingsDeleted: Object.keys(bookings).length,
         storageObjectsDeleted: deletedStorageObjects,
-        databasePathsDeleted: Object.keys(updates).filter((path) => updates[path] === null).length + 1,
+        databasePathsDeleted: Object.keys(updates).filter((path) => updates[path] === null).length,
         alreadyDeleted: !tourExisted,
       };
       log.info('Tour deletion completed', { tourId, ...summary });
       return res.status(200).json({ success: true, tourId, alreadyDeleted: !tourExisted, summary });
     } catch (error) {
       log.error('Tour deletion failed', error, { tourId });
-      return res.status(500).json({ success: false, reason: 'INTERNAL_ERROR' });
+      return deletionErrorResponse(res, error);
     } finally {
       if (locationInvalidation) {
         await releaseDriverLocationProjectionInvalidation({
@@ -402,9 +436,16 @@ const deleteTourData = onRequestWithResult(
         await releaseManualBookingLock({ db, path: assignmentTourLockPath, owner: lockOwner });
       }
       await releaseManualBookingLock({ db, path: lockPath, owner: lockOwner });
+      if (sourceLeaseAcquired) await releaseManualSourceRosterLease({ db, tourId, owner: lockOwner });
     }
   },
 );
+
+const drainReportedUpload = async ({ db, photo }) => {
+  if (!photo._upload || photo._upload.status === 'complete') return true;
+  return (await cleanupMediaUploadOperation({ db, bucket: admin.storage().bucket(),
+    authUid: photo._upload.authUid, operationId: photo._upload.operationId })) === 'cleaned';
+};
 
 const removeReportedPhoto = onRequestWithResult(
   {
@@ -435,11 +476,13 @@ const removeReportedPhoto = onRequestWithResult(
       const contentPath = `group_tour_photos/${tourId}/${photoId}`;
       const photoSnapshot = await db.ref(contentPath).once('value');
       const photo = photoSnapshot.val() || {};
-      const storagePaths = resolveReportedPhotoStoragePaths({ tourId, photo });
-      const deletedStorageObjects = await deleteStoragePaths({ paths: storagePaths });
+      if (!(await drainReportedUpload({ db, photo }))) return res.status(409).json({ success: false, reason: 'STORAGE_CLEANUP_PENDING' });
+      const removal = photoSnapshot.exists() ? await deleteOwnedGroupPhotoRecord({ db, bucket: admin.storage().bucket(),
+        tourId, photoId, trustedOwnerKeys: [photo.userId] }) : { alreadyDeleted: true, storageObjectsRemoved: 0 };
+      if (!removal.deleted && !removal.alreadyDeleted) return res.status(409).json({ success: false, reason: 'PHOTO_CHANGED' });
+      const deletedStorageObjects = removal.storageObjectsRemoved || 0;
       const now = Date.now();
       await db.ref().update({
-        [contentPath]: null,
         [`content_reports/${reportId}/status`]: 'actioned',
         [`content_reports/${reportId}/updatedAt`]: new Date(now).toISOString(),
         [`content_reports/${reportId}/updatedAtMs`]: now,
@@ -455,4 +498,4 @@ const removeReportedPhoto = onRequestWithResult(
   },
 );
 
-module.exports = { createManualPassengerBooking, deleteTourData, removeReportedPhoto };
+module.exports = { createManualPassengerBooking, deleteTourData, removeReportedPhoto, authorizeAdminMutation };

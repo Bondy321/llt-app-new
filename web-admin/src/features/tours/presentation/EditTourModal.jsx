@@ -97,7 +97,7 @@ export function EditTourModal({
         maxParticipants: formData.maxParticipants,
         pickupPoints
       };
-      await updateTour(tourId, updateData);
+      await updateTour(tourId, updateData, { expectedRevision: formData.adminMutationRevision || null });
       notifications.show({
         title: 'Tour Updated',
         message: `"${formData.name}" has been updated`,

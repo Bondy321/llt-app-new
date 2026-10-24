@@ -10,6 +10,8 @@ const projectId = 'demo-llt-deletion-admission';
 process.env.FIREBASE_CONFIG = JSON.stringify({ projectId, databaseURL: `https://${projectId}-default-rtdb.firebaseio.com` });
 process.env.GCLOUD_PROJECT = projectId;
 const admin = require('../functions/node_modules/firebase-admin');
+const { enrolSyntheticDriver } = require('./helpers/enrolSyntheticDriver');
+const { createRestrictedIssuer, supersedeInstallationAuthority } = require('../functions/lib/sessionPublicationAuthority');
 const { issueDriverAppSession, issuePassengerAppSession, buildVerifiedLoginGrantUpdates } = require('../functions/src/domains/app-sessions/sessionIssuance');
 const { updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { reserveAccountDeletion } = require('../functions/src/domains/account-deletion/accountDeletionFunctions');
@@ -36,8 +38,9 @@ const cold = async operation => {
   try { return await operation(app.database()); }
   finally { await app.delete(); }
 };
-const issue = (role, authUid = uid) => cold(database => role === 'driver'
-  ? issueDriverAppSession({ db: database, authUid, driverId, tourId, nowMs: now, profileUpdates: {
+const issue = (role, authUid = uid) => cold(async database => role === 'driver'
+  ? issueDriverAppSession({ db: database, authUid, driverId, tourId, nowMs: now,
+    ...(await enrolSyntheticDriver({ db: database, authUid, driverId, nowMs: now })), driverLoginPolicyGeneration: 0, profileUpdates: {
     [`users/${authUid}/principalType`]: 'driver', [`users/${authUid}/driverId`]: driverId,
     [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
     [`users/${authUid}/driverAssignedTourId`]: tourId,
@@ -46,11 +49,11 @@ const issue = (role, authUid = uid) => cold(database => role === 'driver'
     identityUpdates: {
       [`users/${authUid}/bookingRef`]: bookingRef,
       [`users/${authUid}/stablePassengerId`]: principalId,
+      [`users/${authUid}/identityVersion`]: 'pax_v2',
       [`users/${authUid}/stablePassengerKey`]: principalId,
       [`users/${authUid}/privatePhotoOwnerKey`]: principalId,
       [`identity_bindings/${principalId}/${authUid}`]: true,
       [`passenger_identity_security/${bookingRef}/deviceAuthorizationVersion`]: 2,
-      [`passenger_identity_security/${bookingRef}/passengerPrincipalId`]: principalId,
       [`passenger_identity_security/${bookingRef}/authorizedAuthUids/${authUid}`]: true,
     },
     grantUpdates: buildVerifiedLoginGrantUpdates({ authUid, bookingRef, tourId, nowMs: now }),
@@ -67,6 +70,46 @@ const register = async session => {
 const reserve = expectedSessionId => cold(database => reserveAccountDeletion({ db: database, authUid: uid,
   input: { expectedSessionId, deletionReceipt: receipt }, deletionId, nowMs: now,
 }));
+
+test('durable deletion intent recovers failed publication and permanently fences login', async () => {
+  const session = await issue('passenger');
+  await assert.rejects(reserveAccountDeletion({ db, authUid: uid,
+    input: { expectedSessionId: session.sessionId, deletionReceipt: receipt }, deletionId, nowMs: now,
+    createIssuer: () => ({ db: { ref: () => ({ update: async () => { throw new Error('synthetic admission interruption'); } }) }, close: async () => {} }),
+  }), /synthetic admission interruption/);
+  assert.equal((await read(`app_session_authority/${uid}`)).state, 'deletion_prepared');
+  await assert.rejects(issue('passenger'), error => error.code === 'ACCOUNT_DELETION_IN_PROGRESS');
+  const recovered = await reserve(session.sessionId);
+  assert.equal(recovered.status, 202);
+  assert.equal((await read(`app_session_authority/${uid}`)).state, 'deleted');
+  assert.equal((await read(`app_session_authority/${uid}`)).deletionPublication, undefined);
+  assert.equal((await read(`app_session_authority/${uid}`)).writePaths, undefined);
+  assert.equal(await read(`app_sessions/${uid}`), null);
+  assert.equal((await read(`account_deletion_jobs/v1/${deletionId}`)).privateScope.authUid, uid);
+});
+
+test('queued old deletion admission cannot reset a resumed job after worker progress', async () => {
+  const session = await issue('passenger');
+  let connection; let queued;
+  const queuedPromise = new Promise(resolve => { queued = resolve; });
+  const pending = reserveAccountDeletion({ db, authUid: uid,
+    input: { expectedSessionId: session.sessionId, deletionReceipt: receipt }, deletionId, nowMs: now,
+    createIssuer: args => {
+      const real = createRestrictedIssuer(args); connection = real.db; connection.goOffline();
+      return { ...real, db: { ref: () => ({ update: updates => {
+        const result = real.db.ref().update(updates); queued(); return result;
+      } }) } };
+    },
+  });
+  await Promise.race([queuedPromise, pending]);
+  const recovered = await reserve(session.sessionId);
+  assert.equal(recovered.status, 202);
+  await db.ref(`account_deletion_jobs/v1/${deletionId}`).update({ phase: 'group_media', attemptCount: 2 });
+  const before = await read(`account_deletion_jobs/v1/${deletionId}`);
+  connection.goOnline();
+  assert.equal((await pending).status, 202);
+  assert.deepEqual(await read(`account_deletion_jobs/v1/${deletionId}`), before);
+});
 const authoritySnapshot = async () => Object.fromEntries(await Promise.all([
   `app_sessions/${uid}`, `users/${uid}`, `notification_devices/${uid}`, `notification_consents/${uid}`,
   `tours/${tourId}/participants/${uid}`, `tour_access_grants/${tourId}/${uid}`,
@@ -84,6 +127,7 @@ test.before(async () => { await installDemoDatabaseRules({ projectId }); });
 test.beforeEach(async () => {
   now = Date.now();
   await db.ref().set({
+    passenger_identity_security: { [bookingRef]: { passengerPrincipalId: principalId, passengerIdentityVersion: 'pax_v2' } },
     bookings: { [bookingRef]: { tourId, loginEligible: true } },
     tours: { [tourId]: { isActive: true } },
     drivers: { [driverId]: { currentTourId: tourId } },
@@ -93,6 +137,14 @@ test.beforeEach(async () => {
   });
 });
 test.after(async () => { await Promise.all(admin.apps.map(app => app.delete())); });
+
+test('a superseded passenger epoch cannot admit deletion while old canonical cleanup is delayed', async () => {
+  const session = await issue('passenger');
+  await supersedeInstallationAuthority({ db, authUid: uid, expectedSessionId: session.sessionId });
+  assert.equal((await read(`app_sessions/${uid}`)).sessionId, session.sessionId);
+  assert.deepEqual(await reserve(session.sessionId), { status: 409, reason: 'SESSION_CHANGED' });
+  await assertNoDeletion();
+});
 
 test('stale driver deletion preserves the complete successor and registration through actual assignment', async () => {
   const old = await issue('driver');

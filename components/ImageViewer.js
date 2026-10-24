@@ -419,7 +419,8 @@ export default function ImageViewer({
       setEditingCaption(false);
     } catch (error) {
       loggerService.warn('ImageViewer', 'Caption update failed', { message: error?.message });
-      Alert.alert('Caption update failed', 'Please try again.');
+      Alert.alert(error?.code === 'REQUEST_TIMEOUT' ? 'Caption update unconfirmed' : 'Caption update failed',
+        error?.code === 'REQUEST_TIMEOUT' ? error.message : 'Please try again.');
     } finally {
       setCaptionSaving(false);
     }

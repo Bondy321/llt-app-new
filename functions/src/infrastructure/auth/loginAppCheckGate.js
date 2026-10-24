@@ -8,15 +8,11 @@ const { log } = require('../logging/safeLogger');
 
 /** @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env] */
 const shouldRequireLoginAppCheck = (env = getRuntimeEnvironment()) => {
+  // The first public contract requires attestation in every serving runtime.
+  // Environment omission or an obsolete tester flag cannot disable protection.
+  if (isDeployedFunctionsRuntime(env)) return true;
   if (env.REQUIRE_APP_CHECK_FOR_LOGIN === 'true') return true;
   if (env.REQUIRE_APP_CHECK_FOR_LOGIN === 'false') return false;
-  if (isDeployedFunctionsRuntime(env)) {
-    const error = /** @type {Error & { code?: string }} */ (
-      new Error('Production login App Check enforcement is not configured')
-    );
-    error.code = 'LOGIN_APP_CHECK_CONFIGURATION_REQUIRED';
-    throw error;
-  }
   return false;
 };
 

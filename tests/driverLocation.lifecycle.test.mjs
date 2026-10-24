@@ -38,74 +38,17 @@ const publish = (db, extra = {}) => publishDriverLocation({ tourId: 'TOUR_1',
 const withdraw = db => withdrawLiveDriverLocation({ tourId: 'TOUR_1', appSessionId,
   expectedSessionId: session.sessionId, dbInstance: db });
 
-test('stop during disconnect registration prevents a late set and waits for acknowledged absence', { timeout: 2000 }, async () => {
-  const entered = deferred(); const release = deferred();
-  const h = harness({ arm: async () => { entered.resolve(); await release.promise; } });
-  const publishing = publish(h.db);
-  await entered.promise;
-  let stopped = false;
-  const stopping = withdraw(h.db).then(result => { stopped = true; return result; });
-  await Promise.resolve();
-  assert.equal(stopped, false);
-  release.resolve();
-  const result = await publishing;
-  assert.equal(result.skipped, true);
-  assert.equal((await stopping).withdrawalAcknowledged, true);
-  assert.equal(h.events.some(([event]) => event === 'set-start'), false);
-  assert.equal(h.values.size, 0);
-  assert.equal(h.armed.size, 0);
-});
-
-test('stop during an in-flight set cannot acknowledge before that publication is removed', { timeout: 2000 }, async () => {
-  const entered = deferred(); const release = deferred();
-  const h = harness({ set: async () => { entered.resolve(); await release.promise; } });
-  const publishing = publish(h.db);
-  await entered.promise;
-  let stopped = false;
-  const stopping = withdraw(h.db).then(result => { stopped = true; return result; });
-  await Promise.resolve();
-  assert.equal(stopped, false);
-  release.resolve();
-  assert.equal((await publishing).skipped, true);
-  assert.equal((await stopping).withdrawalAcknowledged, true);
-  assert.equal(h.values.size, 0);
-  assert.ok(h.events.findIndex(([event]) => event === 'set-ack') < h.events.findIndex(([event]) => event === 'remove-start'));
-});
-
-test('queued earlier publications are fenced by stop, but independent live sessions keep working', { timeout: 2000 }, async () => {
-  const entered = deferred(); const release = deferred();
-  const h = harness({ arm: async path => { if (path === sourcePath(session.sessionId)) { entered.resolve(); await release.promise; } } });
-  const first = publish(h.db);
-  await entered.promise;
-  const queued = publish(h.db);
-  const stopped = withdraw(h.db);
-  const fresh = await publish(h.db, { sessionId: 'live_session_b' });
-  assert.equal(fresh.success, true);
-  release.resolve();
-  assert.equal((await first).skipped, true);
-  assert.equal((await queued).skipped, true);
-  await stopped;
-  assert.equal(h.values.has(sourcePath(session.sessionId)), false);
-  assert.equal(h.values.has(sourcePath('live_session_b')), true);
-});
-
-test('a failed update preserves the previous accepted point and does not poison later work', async () => {
-  let rejectSet = false;
-  const h = harness({ set: async () => { if (rejectSet) throw new Error('write rejected'); } });
-  await publish(h.db);
-  const previous = h.values.get(sourcePath(session.sessionId));
-  rejectSet = true;
-  await assert.rejects(publish(h.db), /write rejected/);
-  assert.equal(h.values.get(sourcePath(session.sessionId)), previous);
-  assert.equal(h.armed.has(sourcePath(session.sessionId)), true);
-  rejectSet = false;
-  assert.equal((await publish(h.db)).publicationAcknowledged, true);
+test('automatic publication cannot bypass explicit native tracking, even with valid legacy ownership', async () => {
+  const h = harness();
+  await assert.rejects(publish(h.db), { code: 'EXPLICIT_TRACKING_REQUIRED' });
+  assert.deepEqual(h.events, []);
 });
 
 test('failed deletion retains disconnect cleanup and the exact identity for retry', async () => {
   let failures = 1;
   const h = harness({ remove: async () => { if (failures-- > 0) throw new Error('delete rejected'); } });
-  await publish(h.db);
+  h.values.set(sourcePath(session.sessionId), { latitude: 56 });
+  h.armed.add(sourcePath(session.sessionId));
   const pending = new Map();
   await assert.rejects(withdrawDriverLiveLocationSession({ session, pending, dbInstance: h.db }), /delete rejected/);
   assert.equal(pending.size, 1);
@@ -119,7 +62,8 @@ test('failed deletion retains disconnect cleanup and the exact identity for retr
 
 test('disconnect cancellation failure cannot turn acknowledged deletion into a false failure', async () => {
   const h = harness({ cancel: async () => { throw new Error('cancel rejected'); } });
-  await publish(h.db);
+  h.values.set(sourcePath(session.sessionId), { latitude: 56 });
+  h.armed.add(sourcePath(session.sessionId));
   const result = await withdraw(h.db);
   assert.equal(result.withdrawalAcknowledged, true);
   assert.equal(result.disconnectCancelled, false);
@@ -129,39 +73,15 @@ test('disconnect cancellation failure cannot turn acknowledged deletion into a f
 test('a delayed old cancellation cannot disarm a newer live session', { timeout: 2000 }, async () => {
   const entered = deferred(); const release = deferred();
   const h = harness({ cancel: async path => { if (path === sourcePath(session.sessionId)) { entered.resolve(); await release.promise; } } });
-  await publish(h.db);
+  h.values.set(sourcePath(session.sessionId), { latitude: 56 });
+  h.armed.add(sourcePath(session.sessionId));
   const stopped = withdraw(h.db);
   await entered.promise;
-  await publish(h.db, { sessionId: 'live_session_b' });
+  h.values.set(sourcePath('live_session_b'), { latitude: 57 });
+  h.armed.add(sourcePath('live_session_b'));
   release.resolve(); await stopped;
   assert.equal(h.armed.has(sourcePath('live_session_b')), true);
   assert.equal(h.values.has(sourcePath('live_session_b')), true);
-});
-
-test('lease time is refreshed after pending disconnect work and uses readable server-clock metadata', { timeout: 2000 }, async () => {
-  const entered = deferred(); const release = deferred(); let clock = 1_000;
-  const h = harness({ offset: 30_000, arm: async () => { entered.resolve(); await release.promise; } });
-  const publishing = publish(h.db, { now: () => clock });
-  await entered.promise; clock = 900_000; release.resolve();
-  const result = await publishing;
-  assert.equal(result.timestamp, 930_000);
-  assert.equal(result.timestampSource, 'server_estimate');
-  assert.equal(h.values.get(sourcePath(session.sessionId)).cleanupAtMs, 930_000 + 30 * 60 * 1000);
-});
-
-test('clock metadata failure remains explicit and never reads the private source', async () => {
-  const h = harness({ offsetUnavailable: true });
-  const result = await publish(h.db);
-  assert.equal(result.timestamp, 2_000);
-  assert.equal(result.timestampSource, 'client_estimate');
-  assert.equal(result.storedLocation, null);
-});
-
-test('arming failure prevents publication and existing queued errors do not hide failure', async () => {
-  const h = harness({ arm: async () => { throw new Error('cleanup unavailable'); } });
-  await assert.rejects(publish(h.db), /cleanup unavailable/);
-  assert.equal(h.values.size, 0);
-  assert.equal(h.events.some(([event]) => event === 'set-start'), false);
 });
 
 test('malformed identities and conflicting scopes fail before any remote operation', async () => {

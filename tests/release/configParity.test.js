@@ -17,8 +17,8 @@ test('binary and OTA contexts resolve identical Expo config for every update tar
   ]);
   for (const result of results) {
     assert.deepEqual(result.binary, result.update, result.targetName);
-    assert.equal(result.binary.version, '1.0.7');
-    assert.equal(result.binary.runtimeVersion, '1.0.7');
+    assert.equal(result.binary.version, '1.1.0');
+    assert.equal(result.binary.runtimeVersion, '1.1.0');
     assert.match(result.binary.updateUrl, /^https:\/\/u\.expo\.dev\//u);
     assert.equal(result.binary.owner, 'lochlomondtravel');
     assert.ok(result.binary.projectId);
@@ -26,14 +26,17 @@ test('binary and OTA contexts resolve identical Expo config for every update tar
   }
 });
 
-test('TestFlight is eligible and production remains explicitly ineligible with store cleanup enabled', () => {
+test('all build cohorts require explicit server feature authorization with store cleanup enabled', () => {
   const testflight = resolveProfileParity('testflight', { baseEnvironment: {} });
   const production = resolveProfileParity('production', { baseEnvironment: {} });
   const development = resolveProfileParity('development', { baseEnvironment: {} });
 
-  assert.equal(testflight.binary.featureFlags.driverTourPackTestflight, true);
+  assert.equal(testflight.binary.featureFlags.driverTourPackTestflight, false);
   assert.equal(production.binary.featureFlags.driverTourPackTestflight, false);
   assert.equal(development.binary.featureFlags.driverTourPackTestflight, false);
+  assert.equal(testflight.binary.featureFlags.passengerTripEnabled, true);
+  assert.equal(production.binary.featureFlags.passengerTripEnabled, true);
+  assert.equal(development.binary.featureFlags.passengerTripEnabled, false);
   assert.equal(testflight.binary.productionCleanupEnabled, true);
   assert.equal(production.binary.productionCleanupEnabled, true);
   assert.equal(development.binary.productionCleanupEnabled, false);

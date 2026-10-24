@@ -75,6 +75,17 @@ test('group media access accepts only a current passenger or coherently assigned
     'drivers/D-2': { authUid: 'staleDriver', currentTourId: 'OLD_TOUR' },
     'tour_manifests/TOUR_A/assigned_drivers/D-2': true,
   };
+  values['passenger_identity_security/BOOK-A'] = { deviceAuthorizationVersion: 2, passengerPrincipalId: passengerId, authorizedAuthUids: { passengerA: true } };
+  values['driver_login_policy/v1'] = { schemaVersion: 1, generation: 1, revision: 1, updatedAtMs: Date.now(), enforceSingleDevice: false };
+  for (const uid of ['passengerA', 'driverA', 'staleDriver']) {
+    const session = values[`app_sessions/${uid}`];
+    values[`app_session_authority/${uid}`] = { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: session.sessionId };
+    if (session.driverId) {
+      session.driverLoginPolicyGeneration = 1;
+      values[`driver_device_authorizations/${uid}`] = { schemaVersion: 1, state: 'active', driverId: session.driverId, sessionId: session.sessionId, generation: 'b'.repeat(48) };
+      values[`driver_staff_policy/${session.driverId}`] = { schemaVersion: 1, generation: 'b'.repeat(48) };
+    }
+  }
   const db = dbFor(values);
   const passengerAccess = await __testables.verifyCurrentTourPhotoAccess({ db, authUid: 'passengerA', tourId: 'TOUR_A' });
   assert.equal(passengerAccess.allowed, true);
@@ -109,30 +120,14 @@ test('group media path validation and request bounds reject cross-tour and overs
   }), null);
 });
 
-test('group media App Check supports explicit disable, fails closed when missing, and verifies enabled tokens', async () => {
-  await assert.rejects(
-    __testables.enforceGroupMediaAppCheck({ headers: {} }, { K_SERVICE: 'deployed' }, { verifyToken: async () => {} }),
-    (error) => error.code === 'GROUP_MEDIA_APP_CHECK_CONFIGURATION_REQUIRED',
-  );
-  let disabledVerificationCalls = 0;
-  assert.equal(await __testables.enforceGroupMediaAppCheck(
-    { headers: {} },
-    { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'false' },
-    { verifyToken: async () => { disabledVerificationCalls += 1; } },
-  ), true);
-  assert.equal(disabledVerificationCalls, 0);
-  assert.equal(await __testables.enforceGroupMediaAppCheck(
-    { headers: {} },
-    { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'true' },
-    { verifyToken: async () => {} },
-  ), false);
-  let verified = null;
-  assert.equal(await __testables.enforceGroupMediaAppCheck(
-    { headers: { 'x-firebase-appcheck': 'valid-token' } },
-    { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'true' },
-    { verifyToken: async (token) => { verified = token; } },
-  ), true);
+test('deployed group media App Check is mandatory even with obsolete disable configuration', async () => {
+  for (const env of [{ K_SERVICE: 'deployed' }, { K_SERVICE: 'deployed', REQUIRE_APP_CHECK_FOR_GROUP_MEDIA: 'false' }]) {
+    assert.equal(await __testables.enforceGroupMediaAppCheck({ headers: {} }, env, { verifyToken: async () => {} }), false);
+  }
+  let verified;
+  assert.equal(await __testables.enforceGroupMediaAppCheck({ headers: { 'x-firebase-appcheck': 'valid-token' } }, { K_SERVICE: 'deployed' }, { verifyToken: async token => { verified = token; } }), true);
   assert.equal(verified, 'valid-token');
+  assert.equal(await __testables.enforceGroupMediaAppCheck({ headers: { 'x-firebase-appcheck': 'bad-token' } }, { K_SERVICE: 'deployed' }, { verifyToken: async () => { throw new Error('invalid'); } }), false);
 });
 
 test('group upload metadata is deterministic and contains no customer identity', () => {

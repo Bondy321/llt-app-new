@@ -1,4 +1,5 @@
 import { auth } from '../firebase';
+import { adminHttpRequest } from './adminHttpRequest';
 import { isAdminActionSuccessResponse } from '../shared/api/adminResponseBoundary.js';
 
 const buildFunctionUrl = (functionName) => {
@@ -20,16 +21,7 @@ export async function postAdminAction(functionName, body, options = {}) {
     throw new Error('Your admin session has expired. Sign in again and retry.');
   }
 
-  const token = await auth.currentUser.getIdToken();
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body || {}),
-  });
-  const payload = await response.json().catch(() => null);
+  const { response, payload } = await adminHttpRequest(endpoint, body);
   if (!response.ok || !isAdminActionSuccessResponse(payload)) {
     const reason = payload?.reason || 'INTERNAL_ERROR';
     const error = new Error(options.reasonMessages?.[reason] || options.fallbackError || 'The operation could not be completed safely.');

@@ -167,7 +167,6 @@ module.exports = {
   signGroupMediaRecords: mediaAccess.signGroupMediaRecords,
   normalizeGroupPhotoUploadMetadata: groupMediaFunctions.normalizeGroupPhotoUploadMetadata,
   extensionForGroupPhotoContentType: groupMediaFunctions.extensionForGroupPhotoContentType,
-  reserveGroupPhotoRecord: groupMediaFunctions.reserveGroupPhotoRecord,
   normalizeManualPassengerPayload: manualPassengerBooking.normalizeManualPassengerPayload,
   acquireManualSourceRosterLease: manualPassengerBooking.acquireManualSourceRosterLease,
   findManualPassengerSeatConflicts: manualPassengerBooking.findManualPassengerSeatConflicts,
@@ -253,5 +252,4 @@ module.exports = {
   cleanupExpiredChatStatusSessions: chatPresenceProjection.cleanupExpiredChatStatusSessions,
   reconcileChatActorStatus: chatPresenceProjection.reconcileChatActorStatus,
   normalizePrivatePhotoUploadMetadata: privateMediaFunctions.normalizePrivatePhotoUploadMetadata,
-  reservePrivatePhotoRecord: privateMediaFunctions.reservePrivatePhotoRecord,
 };

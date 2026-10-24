@@ -1,3 +1,4 @@
+const { withPhotoRequestBoundary } = require('./photoRequestBoundary');
 const {
   GROUP_UPLOAD_FUNCTION_NAME,
   IDEMPOTENCY_KEY_MAX_LENGTH,
@@ -23,7 +24,7 @@ const {
   validateVisibility,
 } = require('./photoMediaService');
 
-const uploadPhoto = async (
+const uploadPhotoWithinBoundary = async (
   uri,
   tourId,
   userId,
@@ -40,6 +41,7 @@ const uploadPhoto = async (
     groupUploadEndpoint = buildGroupPhotoEndpointUrl(GROUP_UPLOAD_FUNCTION_NAME, authInstance),
     privateUploadEndpoint = buildPrivatePhotoEndpointUrl(PRIVATE_UPLOAD_FUNCTION_NAME, authInstance),
     appCheckTokenFn = getCurrentAppCheckToken,
+    requestBoundary,
   } = {}
 ) => {
   let uploadStage = 'initializing';
@@ -94,7 +96,7 @@ const uploadPhoto = async (
       try {
         if (!normalizedIdempotencyKey) throw new Error('idempotencyKey is required for group photo uploads');
         if (!groupUploadEndpoint) throw new Error('Group photo upload endpoint is unavailable');
-        const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+        const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, requestBoundary);
         if (typeof onProgress === 'function') onProgress(0.05);
         const encodedMetadata = encodeURIComponent(JSON.stringify({
           tourId: validatedTourId,
@@ -111,7 +113,7 @@ const uploadPhoto = async (
           },
           body: blob,
         });
-        const payload = await response.json().catch(() => null);
+        const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
         if (!response.ok || payload?.success !== true || !payload.photo?.id) {
           throw new Error(payload?.reason === 'NOT_AUTHORIZED'
             ? 'You no longer have access to this tour'
@@ -130,7 +132,7 @@ const uploadPhoto = async (
     try {
       if (!normalizedIdempotencyKey) throw new Error('idempotencyKey is required for private photo uploads');
       if (!privateUploadEndpoint) throw new Error('Private photo upload endpoint is unavailable');
-      const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+      const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, requestBoundary);
       if (typeof onProgress === 'function') onProgress(0.05);
       const encodedMetadata = encodeURIComponent(JSON.stringify({
         tourId: validatedTourId,
@@ -146,7 +148,7 @@ const uploadPhoto = async (
         },
         body: blob,
       });
-      const payload = await response.json().catch(() => null);
+      const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
       if (!response.ok || payload?.success !== true || !payload.photo?.id) {
         throw new Error(payload?.reason === 'NOT_AUTHORIZED'
           ? 'You no longer have access to this tour'
@@ -173,5 +175,9 @@ const uploadPhoto = async (
     throw error;
   }
 };
+
+const uploadPhoto = (uri, tourId, userId, caption = '', options = {}) => withPhotoRequestBoundary({
+  authInstance: options.authInstance || auth, fetchFn: options.fetchFn || fetch, timeoutMs: options.requestTimeoutMs ?? 45000,
+}, boundary => uploadPhotoWithinBoundary(uri, tourId, userId, caption, { ...options, fetchFn: boundary.fetch, requestBoundary: boundary }));
 
 module.exports = { uploadPhoto };

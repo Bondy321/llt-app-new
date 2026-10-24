@@ -73,7 +73,10 @@ function snapshotValue(snapshot) {
 }
 
 async function readValue(ref) {
-  const snapshot = typeof ref?.get === 'function' ? await ref.get() : await ref.once('value');
+  // Use the listener-backed read consistently with session authority checks.
+  // Mixing concurrent get() and once() for the same cold Admin SDK path can
+  // corrupt its listener bookkeeping (duplicate-listen assertion).
+  const snapshot = typeof ref?.once === 'function' ? await ref.once('value') : await ref.get();
   return snapshotValue(snapshot);
 }
 

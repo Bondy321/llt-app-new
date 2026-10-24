@@ -138,7 +138,7 @@ export default function AddPassengerModal({
       });
     } catch (error) {
       notifications.show({
-        title: 'Passenger was not added',
+        title: 'Passenger creation not confirmed',
         message: error.message,
         color: 'red',
       });

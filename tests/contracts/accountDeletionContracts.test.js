@@ -167,11 +167,11 @@ test('rollout contract is private, exact, and fail-closed to known phases', () =
   const contract = definitions.contracts.AccountDeletionRolloutRecord;
   assert.deepEqual(contract.requiredProperties, ['schemaVersion', 'phase', 'revision', 'updatedAtMs']);
   assert.deepEqual(contract.optionalProperties, []);
-  assert.deepEqual(contract.enumValues.phase, ['compatibility', 'server_only']);
+  assert.deepEqual(contract.enumValues.phase, ['server_only']);
   assert.deepEqual(contract.safeClientProjection, []);
 
   const compatibility = { schemaVersion: 1, phase: 'compatibility', revision: 1, updatedAtMs: 1000 };
-  assert.equal(validate('AccountDeletionRolloutRecord', compatibility, { clientProjection: false }).valid, true);
+  assert.equal(validate('AccountDeletionRolloutRecord', compatibility, { clientProjection: false }).valid, false);
   assert.equal(validate('AccountDeletionRolloutRecord', { ...compatibility, phase: 'server_only' }, { clientProjection: false }).valid, true);
   assert.equal(validate('AccountDeletionRolloutRecord', { ...compatibility, phase: 'legacy' }, { clientProjection: false }).valid, false);
   assert.equal(validate('AccountDeletionRolloutRecord', { ...compatibility, revision: 0 }, { clientProjection: false }).valid, false);

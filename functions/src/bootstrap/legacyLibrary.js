@@ -9,6 +9,7 @@ const ALLOWED_LIBRARY_MODULES = new Set([
   'appSession',
   'appSessionAccess',
   'appSessionLock',
+  'sessionPublicationAuthority',
   'chatPresenceProjection',
   'driverLocationExpiryCleanup',
   'driverLocationProjection',

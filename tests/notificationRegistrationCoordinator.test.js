@@ -175,6 +175,16 @@ test('binds operational eligibility to the exact app session and a monotonic reg
   ]);
 });
 
+test('signed-in unassigned driver supplies exact ownership without operational eligibility', async () => {
+  const harness = buildCoordinator();
+  await harness.coordinator.start(activeState({ operationalEligible: false, tourId: null }));
+  assert.equal(harness.reconciliations[0].appSessionId, 'sess-1');
+  assert.equal(harness.reconciliations[0].appSessionRevision, 1);
+  assert.equal(harness.reconciliations[0].operationalEligible, false);
+  await harness.coordinator.update(activeState({ sessionId: null, sessionRevision: null, operationalEligible: false, tourId: null }));
+  assert.equal(harness.reconciliations[1].appSessionId, undefined);
+});
+
 test('foreground activation and reconnect reconcile the current authenticated device', async () => {
   const harness = buildCoordinator();
   await harness.coordinator.start(activeState({ isConnected: false }));
@@ -372,7 +382,7 @@ test('notification HTTP client retries only transient lock conflicts with the sa
   const oldProject = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
   process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-notification-test';
   Module._load = function mocked(request, parent, isMain) {
-    if (request === '../../firebase') return { auth: { currentUser: { getIdToken: async () => 'test-token' } } };
+    if (request === '../../firebase') return { auth: { currentUser: { uid: 'fixture-phone', getIdToken: async () => 'test-token' } }, getCurrentAppCheckToken: async () => 'fixture-appcheck' };
     return originalLoad(request, parent, isMain);
   };
   try {

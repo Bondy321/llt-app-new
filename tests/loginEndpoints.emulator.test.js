@@ -13,13 +13,15 @@ process.env.REQUIRE_APP_CHECK_FOR_LOGIN = 'false';
 const admin = require('../functions/node_modules/firebase-admin');
 const express = require('../functions/node_modules/express');
 const { verifyPassengerLogin } = require('../functions/src/domains/passenger-auth/passengerLoginFunction');
+const { issueStaffEnrolment } = require('../functions/src/domains/driver-auth/staffEnrolment');
+const { installDemoDatabaseRules } = require('./helpers/installDemoDatabaseRules');
 const { verifyDriverLogin } = require('../functions/src/domains/driver-auth/driverLoginFunction');
 const { createManualPassengerBooking } = require('../functions/src/domains/administration/administrationFunctions');
 const { acquireManualBookingLock, releaseManualBookingLock } = require('../functions/src/infrastructure/database/operationLock');
 const { recomputeTourProjection } = require('../functions/src/domains/admin-dashboard/dashboardProjectionFunctions');
 const { getTourManifest } = require('../functions/src/domains/manifests/manifestFunction');
 const { endAppSession, revokeAppSession } = require('../functions/src/domains/app-sessions/sessionFunctions');
-const { updateNotificationDeviceRegistration, updateNotificationDevice } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
+const { updateNotificationDeviceRegistration, updateNotificationDevice, getSafetyAlertDetail } = require('../functions/src/domains/notifications/notificationDeviceFunctions');
 const { verifyCurrentTourPhotoAccess } = require('../functions/src/domains/media/mediaAccess');
 const { resolvePrivatePhotoMedia } = require('../functions/src/domains/media/privateMediaFunctions');
 const { getPassengerTripSnapshot } = require('../functions/src/domains/passenger-trip/passengerTripFunctions');
@@ -32,6 +34,7 @@ const writer = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'log
 const db = writer.database();
 let server; let origin;
 test.before(async () => {
+  await installDemoDatabaseRules({ projectId });
   const app = express();
   app.use(express.json());
   app.post('/passenger', verifyPassengerLogin);
@@ -41,6 +44,7 @@ test.before(async () => {
   app.post('/end', endAppSession);
   app.post('/revoke', revokeAppSession);
   app.post('/notifications', updateNotificationDeviceRegistration);
+  app.post('/safety', getSafetyAlertDetail);
   app.post('/private-media', resolvePrivatePhotoMedia);
   app.post('/trip', getPassengerTripSnapshot);
   app.post('/assignment', assignDriverToTour);
@@ -55,15 +59,28 @@ test.after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
   await Promise.all(admin.apps.map((app) => app.delete()));
 });
-const newIdentity = async () => {
+const newIdentity = async ({ adminMfa = false, secondFactor = null } = {}) => {
   const response = await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=emulator-key`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnSecureToken: true }),
   });
   assert.equal(response.status, 200);
   const body = await response.json();
-  return { uid: body.localId, token: body.idToken };
+  let token = body.idToken;
+  if (adminMfa || secondFactor) {
+    // Emulator-only synthetic verified claims. This tests server authorization,
+    // not the external Identity Platform factor enrolment ceremony.
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+    payload.firebase = { ...payload.firebase, sign_in_provider: 'password', sign_in_second_factor: adminMfa ? 'totp' : secondFactor };
+    token = [Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+      Buffer.from(JSON.stringify(payload)).toString('base64url'), ''].join('.');
+  }
+  return { uid: body.localId, token };
 };
 const login = async (kind, identity, body, extraHeaders = {}) => {
+  if (kind === 'driver' && body.enrolmentSecret === undefined && (await db.ref(`drivers/${body.driverId}`).get()).exists()) {
+    const approval = await issueStaffEnrolment({ db, driverId: body.driverId, adminUid: 'synthetic-admin' });
+    body = { ...body, enrolmentSecret: approval.secret };
+  }
   const response = await fetch(`${origin}/${kind}`, { method: 'POST',
     headers: { ...extraHeaders, 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` },
     body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
@@ -216,7 +233,7 @@ test('manual source-roster lease contends across Admin connections and releases 
 });
 
 test('manual HTTP creation is lease-fenced, preserves source counts, and separates login eligibility from the driver roster', async () => {
-  const adminIdentity = await newIdentity();
+  const adminIdentity = await newIdentity({ adminMfa: true });
   const adminUid = adminIdentity.uid;
   const tourId = `MANUAL_HTTP_${Date.now()}`;
   const generation = 'd'.repeat(64);
@@ -496,7 +513,7 @@ test('two passenger phones share the booking identity while logout and revocatio
   assert.deepEqual((await db.ref(`app_sessions/${first.uid}`).get()).val(), before);
   const repeated = await login('passenger', second, passengerBody('DEVICE123'));
   assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
-  const operator = await newIdentity();
+  const operator = await newIdentity({ adminMfa: true });
   await db.ref(`admin_users/${operator.uid}`).set(true);
   const revoked = await login('revoke', operator, { authUid: second.uid,
     expectedSessionId: repeated.body.session.sessionId, reason: 'staff_request' },
@@ -708,24 +725,35 @@ test('driver notification saves release locks and logout allows immediate re-log
     name: 'Synthetic Driver', isDriver: true, timestamp: nowMs, expiresAtMs: nowMs + 300000 };
   const { reconcileChatActorStatus } = require('../functions/lib/chatPresenceProjection');
   const { reconcileDriverLocationProjection } = require('../functions/lib/driverLocationProjection');
+  const liveSharingSessionId = 'track_driver_cycle';
+  const sourceKey = `${session.sessionId}|${liveSharingSessionId}`;
   await db.ref().update({
+    [`driver_tracking_sessions/${sourceKey}`]: { schemaVersion: 1, authUid: identity.uid, appSessionId: session.sessionId,
+      driverId, tourId, liveSharingSessionId, status: 'active', startedAtMs: nowMs, expiresAtMs: session.expiresAtMs },
     [`chat_presence_sessions/group/${session.sessionId}`]: record,
     [`chat_typing_sessions/group/${session.sessionId}`]: record,
-    [`driver_location_sessions/${session.sessionId}`]: { ...record, source: 'auto', mode: 'live', driverId, latitude: 56, longitude: -4 },
+    [`driver_location_sessions/${sourceKey}`]: { ...record, liveSharingSessionId, source: 'auto', mode: 'live', driverId,
+      accuracy: 5, cleanupAtMs: nowMs + 300000, latitude: 56, longitude: -4 },
   });
   // Independent SDK connections reproduce competing source triggers during logout.
   const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), 'driver-cycle-projections');
   try {
-    await Promise.all([
+    // Drain every admitted trigger before closing an SDK connection, even when
+    // one trigger fails; teardown must not obscure the original failure.
+    const settled = await Promise.allSettled([
       reconcileChatActorStatus({ database: fresh.database(), tourId, actorKey: driverId }),
       reconcileChatActorStatus({ database: db, tourId, actorKey: driverId }),
       reconcileDriverLocationProjection({ database: fresh.database(), tourId }),
     ]);
+    for (const result of settled) if (result.status === 'rejected') throw result.reason;
+    assert.equal((await db.ref(`chats/${tourId}/presence/${driverId}`).once('value')).val().online, true);
+    assert.equal((await db.ref(`tours/${tourId}/driverLocation`).once('value')).val().isSharing, true);
     const ended = await login('end', identity, { expectedSessionId: session.sessionId, reason: 'user_logout' });
     assert.equal(ended.status, 200, JSON.stringify(ended.body));
     assert.equal((await db.ref(`app_sessions/${identity.uid}`).once('value')).exists(), false);
     assert.equal((await db.ref(`chat_presence_sessions/group/${session.sessionId}`).once('value')).exists(), false);
-    assert.equal((await db.ref(`driver_location_sessions/${session.sessionId}`).once('value')).exists(), false);
+    assert.equal((await db.ref(`driver_location_sessions/${sourceKey}`).once('value')).exists(), false);
+    assert.equal((await db.ref(`tours/${tourId}/driverLocation`).once('value')).val().isSharing, false);
     const repeated = await login('driver', identity, { driverId });
     assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
     assert.notEqual(repeated.body.session.sessionId, session.sessionId);
@@ -746,7 +774,7 @@ test('notification mutation holds both locks until persistence completes and can
     const held = new Promise((resolve) => { proceed = resolve; });
     const started = new Promise((resolve) => { entered = resolve; });
     const database = fresh.database();
-    const wrapped = { ref: (path) => {
+    const wrapped = { app: database.app, ref: (path) => {
       const ref = database.ref(path);
       if (path === `notification_devices/${authUid}`) {
         const original = ref.once.bind(ref);
@@ -773,13 +801,28 @@ test('group and private photo variants reach ready across cold-cache transaction
     const collection = visibility === 'group' ? 'group_tour_photos/VARIANT_TEST' : 'private_tour_photos/VARIANT_TEST/owner1';
     const record = { storagePath: `${collection}/source.png`, userId: 'owner1', variantStatus: 'processing' };
     await db.ref(`${collection}/photo1`).set(record);
-    const saved = new Map();
+    const saved = new Map([[record.storagePath, source]]);
+    const metadata = new Map([[record.storagePath, { generation: '1', size: String(source.length), metadata: {} }]]);
+    let generation = 1;
     const bucket = { file: (objectPath) => ({
-      download: async () => [source],
-      getMetadata: async () => [{ generation: '1', metadata: {} }],
-      setMetadata: async () => {},
-      save: async (buffer) => saved.set(objectPath, buffer),
-      delete: async () => saved.delete(objectPath),
+      download: async () => [saved.get(objectPath)],
+      getMetadata: async () => {
+        if (!metadata.has(objectPath)) throw Object.assign(new Error('Missing object'), { code: 404 });
+        return [metadata.get(objectPath)];
+      },
+      setMetadata: async (value) => metadata.set(objectPath, { ...metadata.get(objectPath), ...value }),
+      save: async (buffer, options) => {
+        assert.equal(options.preconditionOpts.ifGenerationMatch, 0);
+        if (metadata.has(objectPath)) throw Object.assign(new Error('Object exists'), { code: 412 });
+        saved.set(objectPath, buffer);
+        metadata.set(objectPath, { ...options.metadata, generation: String(++generation), size: String(buffer.length) });
+      },
+      delete: async (options) => {
+        if (metadata.get(objectPath)?.generation !== String(options.ifGenerationMatch)) {
+          throw Object.assign(new Error('Generation changed'), { code: 412 });
+        }
+        metadata.delete(objectPath); saved.delete(objectPath);
+      },
     }) };
     const fresh = admin.initializeApp(JSON.parse(process.env.FIREBASE_CONFIG), `variant-${visibility}`);
     try {
@@ -789,12 +832,17 @@ test('group and private photo variants reach ready across cold-cache transaction
       assert.equal(stored.variantStatus, 'ready');
       assert.ok(saved.get(stored.viewerStoragePath)?.length);
       assert.ok(saved.get(stored.thumbnailStoragePath)?.length);
+      for (const path of [stored.viewerStoragePath, stored.thumbnailStoragePath]) {
+        assert.equal(metadata.get(path).metadata.sourcePath, record.storagePath);
+        assert.equal(metadata.get(path).metadata.sourceGeneration, '1');
+        assert.equal(metadata.get(path).metadata.visibility, visibility);
+      }
     } finally { await fresh.delete(); }
   }
 });
 
 test('authenticated admin assignment finishes its durable transition and exact replay preserves passenger history', async () => {
-  const operator = await newIdentity();
+  const operator = await newIdentity({ adminMfa: true });
   await db.ref().update({
     [`admin_users/${operator.uid}`]: true,
     'drivers/D-ASSIGNMENT-COLD': { currentTourId: 'ASSIGNMENT_OLD', assignmentRevision: 0, name: 'Synthetic driver' },
@@ -817,4 +865,30 @@ test('authenticated admin assignment finishes its durable transition and exact r
   assert.equal((await db.ref('drivers/D-ASSIGNMENT-COLD/assignmentRevision').get()).val(), revision);
   assert.deepEqual((await db.ref('tour_manifests/ASSIGNMENT_NEXT/bookings/retained-history').get()).val(),
     { passengerCount: 2, boardingStatus: 'BOARDED' });
+});
+
+test('safety HTTP reads and mutations require current admin allowlist and TOTP, with revoked identities rejected', async () => {
+  const tourId = 'SAFETY_ADMIN_MFA';
+  const headers = { Origin: 'https://loch-lomond-travel-admin.web.app' };
+  for (const secondFactor of [null, 'phone', 'totp']) {
+    const identity = await newIdentity({ secondFactor });
+    const eventId = `event_${secondFactor || 'none'}`;
+    const path = `tours/${tourId}/safetyAlerts/${eventId}`;
+    await db.ref().update({ [`admin_users/${identity.uid}`]: true,
+      [path]: { status: 'pending', message: 'Synthetic safety alert', timestampMs: Date.now() } });
+    const before = (await db.ref(path).once('value')).val();
+    for (const action of [undefined, 'acknowledge']) {
+      const response = await login('safety', identity, { tourId, eventId, ...(action ? { action } : {}) }, headers);
+      assert.equal(response.status, secondFactor === 'totp' ? 200 : 403, JSON.stringify(response.body));
+      if (secondFactor !== 'totp') assert.deepEqual((await db.ref(path).once('value')).val(), before);
+    }
+    if (secondFactor !== 'totp') continue;
+    assert.equal((await db.ref(`${path}/status`).once('value')).val(), 'acknowledged');
+    await db.ref(`admin_users/${identity.uid}`).remove();
+    assert.equal((await login('safety', identity, { tourId, eventId }, headers)).status, 403);
+    await db.ref(`admin_users/${identity.uid}`).set(true);
+    await admin.auth().updateUser(identity.uid, { disabled: true });
+    assert.equal((await login('safety', identity, { tourId, eventId, action: 'resolve' }, headers)).status, 401);
+    assert.equal((await db.ref(`${path}/status`).once('value')).val(), 'acknowledged');
+  }
 });

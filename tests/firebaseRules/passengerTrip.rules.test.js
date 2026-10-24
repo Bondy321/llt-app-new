@@ -13,8 +13,9 @@ const seed = async (patch = {}) => env.withSecurityRulesDisabled(async (context)
   await context.database(url).ref().set({
     app_sessions: { [uid]: { schemaVersion: 1, authUid: uid, principalType: 'passenger', principalId: principal,
       sessionId: session, tourId: 'TRIP_1', status: 'active', expiresAtMs: now + 60000 } },
+    app_session_authority: { [uid]: { schemaVersion: 1, state: 'committed', epoch: 'a'.repeat(48), sessionId: session } },
     users: { [uid]: { principalType: 'passenger', stablePassengerId: principal, identityVersion: 'pax_v2', bookingRef: 'TEST123' } },
-    passenger_identity_security: { TEST123: { passengerPrincipalId: principal, authorizedAuthUid: uid } },
+    passenger_identity_security: { TEST123: { passengerPrincipalId: principal, authorizedAuthUid: uid, deviceAuthorizationVersion: 2, authorizedAuthUids: { [uid]: true } } },
     bookings: { TEST123: { tourId: 'TRIP_1' }, OTHER: { tourId: 'TRIP_2' } },
     tours: { TRIP_1: { participants: { [uid]: { schemaVersion: 2, userId: uid, principalId: principal,
       sessionId: session, sessionExpiresAtMs: now + 60000 } } } },
@@ -46,6 +47,7 @@ test('two independently authorized phones read their shared booking through exac
     'passenger_identity_security/TEST123/deviceAuthorizationVersion': 2,
     [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: true,
     [`passenger_identity_security/TEST123/authorizedAuthUids/${secondUid}`]: true,
+    [`app_session_authority/${secondUid}`]: { schemaVersion: 1, state: 'committed', epoch: 'b'.repeat(48), sessionId: secondSession },
     [`app_sessions/${secondUid}`]: { schemaVersion: 1, authUid: secondUid, principalType: 'passenger',
       principalId: principal, sessionId: secondSession, tourId: 'TRIP_1', status: 'active', expiresAtMs },
     [`users/${secondUid}`]: { principalType: 'passenger', stablePassengerId: principal,
@@ -117,7 +119,8 @@ test('expired, replaced, reassociated, locked and deleted sessions cannot read s
     { [`app_sessions/${uid}/expiresAtMs`]: 1 },
     { [`tours/TRIP_1/participants/${uid}/sessionId`]: `sess_v1_${'c'.repeat(32)}` },
     { 'bookings/TEST123/tourId': 'TRIP_2' },
-    { 'passenger_identity_security/TEST123/authorizedAuthUid': 'another' },
+    { [`passenger_identity_security/TEST123/authorizedAuthUids/${uid}`]: null },
+    { [`app_session_authority/${uid}/state`]: 'preparing' },
     { 'passenger_identity_security/TEST123/loginLocked': true },
     { [`account_deletion_active/v1/${uid}`]: { job: 'synthetic' } },
   ]) { await seed(patch); await assertFails(read(uid, 'bookings/TEST123')); await assertFails(read(uid, 'tours/TRIP_1')); }

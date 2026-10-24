@@ -13,6 +13,7 @@ const harness = overrides => {
   const database = { ref: target => { sdkCalls.push(target); throw Error('RTDB socket unavailable'); } };
   const fetchFn = async (...args) => { calls.push(args); return { ok: true, json: async () => ({ success: true, withdrawalAcknowledged: true }) }; };
   return { calls, sdkCalls, auth, repository: createTrackingRestRepository({ auth, database, fetchFn,
+    getAppCheckToken: async () => 'synthetic-app-check',
     baseUrl: 'https://synthetic.firebaseio.test', retireEndpoint: 'https://synthetic.functions.test/stopDriverTrackingSession',
     timeoutMs: 25, now: () => intent.startedAtMs, ...overrides }) };
 };
@@ -24,6 +25,7 @@ test('GPS, authority reads, fences and retirement work with an entirely unavaila
   await h.repository.readCurrentSession('test-driver');
   await h.repository.retireSession(intent);
   assert.equal(h.calls.length, 4); assert.equal(h.sdkCalls.length, 0);
+  for (const [, options] of h.calls) assert.equal(options.headers['X-Firebase-AppCheck'], 'synthetic-app-check');
   assert.equal(result.publicationAcknowledged, true);
   assert.equal(h.calls[0][1].method, 'PUT');
   assert.equal(new URL(h.calls[0][0]).pathname, `/${encodeURIComponent('driver_location_sessions')}/${encodeURIComponent(`${SID}|track_session_one`)}.json`);
@@ -62,11 +64,12 @@ test('authority changes during token retrieval prevent dispatch', async () => {
   await assert.rejects(() => wrongUser.repository.retireSession(intent), /AUTH_UID_CHANGED/);
 });
 
-test('token, auth restoration, HTTP response and body parsing share one bounded deadline', async () => {
+test('token, App Check, auth restoration, HTTP response and body parsing share one bounded deadline', async () => {
   const never = () => new Promise(() => {});
   const cases = [
     { auth: { authStateReady: never } },
     { auth: { currentUser: { uid: 'test-driver', getIdToken: never } } },
+    { getAppCheckToken: never },
     { fetchFn: never },
     { fetchFn: async () => ({ ok: true, json: never }) },
   ];

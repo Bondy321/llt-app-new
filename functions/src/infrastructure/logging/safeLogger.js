@@ -15,7 +15,7 @@ const maskIdentifier = (value) => {
 const isSensitiveLogKey = (key) => {
   const normalized = String(key || '').toLowerCase();
   const sensitiveFragments = [
-    'token', 'receipt', 'bookingref', 'clientkey', 'userid', 'senderid', 'senderuid',
+    'token', 'secret', 'password', 'enrolmentcode', 'receipt', 'bookingref', 'clientkey', 'userid', 'senderid', 'senderuid',
     'authuid', 'adminuid', 'participantid', 'recipientid', 'driverid', 'tourid',
     'tourcode', 'principalid', 'principalkey', 'sessionid', 'deletionid', 'messageid',
     'photoid', 'eventid', 'jobid', 'runid', 'sourceid', 'warningid', 'attemptid',
@@ -49,7 +49,7 @@ const sanitizeLogValue = (key, value) => {
       return sanitized;
     }, /** @type {LogData} */ ({}));
   }
-  if (/token/u.test(normalizedKey)) return '[redacted]';
+  if (/token|secret|password|enrolmentcode/u.test(normalizedKey)) return '[redacted]';
   if (isSensitiveLogKey(key)) return maskIdentifier(value);
   return value;
 };
@@ -61,6 +61,7 @@ const sanitizeLogData = (data = {}) => /** @type {LogData} */ (sanitizeLogValue(
 const sanitizeLogText = (value) => {
   if (value === null || value === undefined) return value;
   return String(value)
+    .replace(/\bLLT1-[A-Za-z0-9_-]{43}\b/gu, '[redacted-enrolment-secret]')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, '[redacted-email]')
     .replace(/([?&]token=)[^&\s]+/giu, '$1[redacted]')
     .replace(/\bExponentPushToken\[[^\]]+\]/gu, 'ExponentPushToken[redacted]')

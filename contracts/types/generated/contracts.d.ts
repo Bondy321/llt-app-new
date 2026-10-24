@@ -496,14 +496,14 @@ export interface PendingAccountDeletionRecord {
 
 export interface AccountDeletionRolloutRecord {
   schemaVersion: number;
-  phase: "compatibility" | "server_only";
+  phase: "server_only";
   revision: number;
   updatedAtMs: number;
 }
 
 export interface LiveStateRolloutRecord {
   schemaVersion: number;
-  phase: "compatibility" | "cutover";
+  phase: "cutover";
   projectionRevision: number;
   updatedAtMs: number;
 }

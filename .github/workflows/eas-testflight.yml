@@ -3,6 +3,11 @@ name: EAS TestFlight
 on:
   workflow_dispatch:
     inputs:
+      prerequisites_verified:
+        description: I verified deployed backend and rules, real App Check providers/configuration, and acceptance for this exact reviewed commit
+        required: true
+        default: false
+        type: boolean
       eas_build_id:
         description: Existing completed EAS iOS build ID to submit without creating a new build
         required: false
@@ -21,9 +26,13 @@ concurrency:
   group: eas-testflight-production
   cancel-in-progress: false
 
+env:
+  TZ: Europe/London
+
 jobs:
   build-ios:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prerequisites_verified == true }}
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
       actions: read
@@ -46,9 +55,10 @@ jobs:
       EXPO_PUBLIC_SUPPORT_PHONE: '+441414876737'
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'false'
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'false'
-      LLT_REQUIRE_PRODUCTION_APPCHECK: 'false'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'true'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'true'
+      LLT_REQUIRE_PRODUCTION_APPCHECK: 'true'
+      EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: 'true'
       EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
       EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
       EXPO_ASC_API_KEY_ISSUER_ID: ${{ secrets.EXPO_ASC_API_KEY_ISSUER_ID }}
@@ -58,25 +68,44 @@ jobs:
       EAS_BUILD_ID: ${{ inputs.eas_build_id }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
       - name: Verify release commit is on main
-        run: |
-          git fetch origin main --depth=1
-          git merge-base --is-ancestor ${{ github.sha }} origin/main
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: bash .github/actions/verified-node/verify-main.sh
 
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-            web-admin/package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -86,20 +115,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
 
-      - name: Setup Java for Firebase emulators
+      - name: Select and verify runner Java 21 without JavaScript actions
         if: ${{ !inputs.eas_build_id }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+        uses: ./.github/actions/runner-java21
 
       - name: Install dependencies
         if: ${{ !inputs.eas_build_id }}
         run: npm ci
-
-      - name: Audit production dependency graphs
-        if: ${{ !inputs.eas_build_id }}
-        run: npm run security:audit:release
 
       - name: Install Functions dependencies
         if: ${{ !inputs.eas_build_id }}
@@ -108,6 +130,10 @@ jobs:
       - name: Install web admin dependencies for integration tests
         if: ${{ !inputs.eas_build_id }}
         run: npm --prefix web-admin ci
+
+      - name: Audit production dependency graphs
+        if: ${{ !inputs.eas_build_id }}
+        run: npm run security:audit:release
 
       - name: Run complete mobile tests
         if: ${{ !inputs.eas_build_id }}
@@ -165,11 +191,7 @@ jobs:
 
       - name: Setup Expo and EAS CLI
         if: ${{ !inputs.eas_build_id }}
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: 22.6.0
-          packager: npm
-          token: ${{ env.EXPO_TOKEN }}
+        run: npm install --global eas-cli@22.6.0
 
       - name: Verify pinned release CLIs
         if: ${{ !inputs.eas_build_id }}
@@ -221,7 +243,7 @@ jobs:
           const builds = Array.isArray(parsed) ? parsed : [parsed];
           const build = builds.find((item) => String(item.platform).toLowerCase() === 'ios') || builds[0];
 
-          if (!build || !build.id) {
+          if (!build || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(build.id || '')) {
             throw new Error('EAS build output did not include an iOS build id.');
           }
 
@@ -246,6 +268,10 @@ jobs:
           manual_build_id="${manual_build_id%"${manual_build_id##*[![:space:]]}"}"
 
           if [[ -n "$manual_build_id" ]]; then
+            [[ "$manual_build_id" =~ ^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$ ]] || {
+              echo "::error::Existing EAS build ID must be a UUID."
+              exit 1
+            }
             echo "build_id=$manual_build_id" >> "$GITHUB_OUTPUT"
             echo "Using existing EAS iOS build id: $manual_build_id"
             exit 0
@@ -256,17 +282,24 @@ jobs:
             exit 1
           fi
 
+          [[ "$BUILT_EAS_BUILD_ID" =~ ^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$ ]] || {
+            echo "::error::Returned EAS build ID must be a UUID."
+            exit 1
+          }
           echo "build_id=$BUILT_EAS_BUILD_ID" >> "$GITHUB_OUTPUT"
           echo "Using newly-created EAS iOS build id: $BUILT_EAS_BUILD_ID"
 
   submit-testflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prerequisites_verified == true }}
     needs: build-ios
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
+      actions: read
       contents: read
     env:
       CI: true
+      EAS_BUILD_PROFILE: testflight
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EXPO_ASC_APP_ID: ${{ secrets.EXPO_ASC_APP_ID }}
       EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
@@ -279,8 +312,33 @@ jobs:
       EAS_BUILD_ID: ${{ needs.build-ios.outputs.build_id }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
       - name: Validate iOS submit configuration inputs
         shell: bash
@@ -318,25 +376,33 @@ jobs:
             echo "::notice::No App Store Connect API key secrets were provided; EAS Submit will use App Store Connect credentials configured in EAS, if available."
           fi
 
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
 
+      - name: Independently require successful CI for exact submission SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verifyCiRunForSha.js --sha=${{ github.sha }}
+
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Functions dependencies for the complete submission audit
+        run: npm --prefix functions ci
+
+      - name: Install web admin dependencies for the complete submission audit
+        run: npm --prefix web-admin ci
+
+      - name: Audit production dependency graphs before every submission
+        run: npm run security:audit:release
+
       - name: Setup Expo and EAS CLI
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: 22.6.0
-          packager: npm
-          token: ${{ env.EXPO_TOKEN }}
+        run: npm install --global eas-cli@22.6.0
 
       - name: Verify pinned release CLIs
         run: node scripts/release/checkCliVersions.js --check-eas
@@ -349,22 +415,12 @@ jobs:
           eas whoami
           eas project:info --non-interactive
 
-      - name: Verify selected EAS build belongs to release SHA
+      - name: Verify completed TestFlight artifact and exact release provenance
         shell: bash
         run: |
           set -euo pipefail
           eas build:view "$EAS_BUILD_ID" --json > eas-selected-build.json
-          node <<'NODE'
-          const fs = require('fs');
-          const build = JSON.parse(fs.readFileSync('eas-selected-build.json', 'utf8'));
-          const builtSha = build.gitCommitHash || build.gitCommit?.hash || build.metadata?.gitCommitHash;
-          const releaseSha = process.env.GITHUB_SHA;
-
-          if (!builtSha || builtSha !== releaseSha) {
-            throw new Error(`Selected EAS build belongs to ${builtSha || 'an unknown commit'}, not release SHA ${releaseSha}.`);
-          }
-          console.log(`Selected EAS build matches exact release SHA ${releaseSha}.`);
-          NODE
+          node scripts/release/verifyTestFlightBuild.js eas-selected-build.json
 
       - name: Configure iOS submit profile
         shell: bash

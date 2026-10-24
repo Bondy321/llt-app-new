@@ -271,49 +271,13 @@ test('a location captured for a revoked tour scope cannot reach Firebase', async
   assert.deepEqual(writes, []);
 });
 
-test('auto publication arms cleanup and returns an acknowledged source with an explicit time estimate', async () => {
-  const events = [];
-  let stored;
-  const dbInstance = { ref(path) {
-    if (path === '.info/serverTimeOffset') return { async once() { events.push('clock'); return { val: () => 8642 }; } };
-    return {
-      async set(value) { events.push('set'); stored = value; },
-      onDisconnect() { return { async remove() { events.push('disconnect-remove'); } }; },
-      async once() { throw new Error('private read denied'); },
-    };
-  } };
-  const result = await publishDriverLocation({
-    tourId: 'TOUR_1', location: { latitude: 56, longitude: -4, accuracy: 8 },
-    source: 'auto', sessionId: 'session_live', sessionScope: TEST_SESSION_SCOPE,
-    dbInstance, now: () => 1234,
-  });
-  assert.deepEqual(events, ['disconnect-remove', 'clock', 'set']);
-  assert.equal(result.timestamp, 9876);
-  assert.equal(result.timestampSource, 'server_estimate');
-  assert.equal(result.publicationAcknowledged, true);
-  assert.equal(result.storedLocation, null);
-  assert.deepEqual(stored.timestamp, { '.sv': 'timestamp' });
-  assert.equal(stored.cleanupAtMs, 9876 + 30 * 60 * 1000);
-});
-
-test('post-write scope revocation removes only the publication session', async () => {
-  let current = null;
-  let scopeCurrent = true;
-  const paths = [];
-  const dbInstance = { ref(path) { return {
-    onDisconnect() { return { async remove() {}, async cancel() {} }; },
-    async set(value) { current = value; scopeCurrent = false; },
-    async remove() { paths.push(path); current = null; },
-  }; } };
-  const result = await publishDriverLocation({
-    tourId: 'TOUR_1', location: { latitude: 56, longitude: -4, accuracy: 8 },
-    source: 'auto', sessionId: 'session_live', sessionScope: TEST_SESSION_SCOPE,
-    dbInstance, isScopeCurrent: () => scopeCurrent,
-  });
-  assert.equal(result.reason, 'DRIVER_LOCATION_SCOPE_REVOKED_AFTER_WRITE');
-  assert.equal(result.withdrawalAcknowledged, true);
-  assert.equal(current, null);
-  assert.deepEqual(paths, [`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`]);
+test('legacy automatic publication requires an explicitly started native tracking session', async () => {
+  let remoteCalls = 0;
+  await assert.rejects(publishDriverLocation({ tourId: 'TOUR_1', source: 'auto',
+    location: { latitude: 56, longitude: -4, accuracy: 8 }, sessionId: 'session_live',
+    sessionScope: TEST_SESSION_SCOPE, dbInstance: { ref() { remoteCalls++; throw new Error('must not access Firebase'); } },
+  }), { code: 'EXPLICIT_TRACKING_REQUIRED' });
+  assert.equal(remoteCalls, 0);
 });
 
 test('live sharing and fixed pickup remain separate across withdrawal', async () => {
@@ -367,15 +331,8 @@ test('live sharing and fixed pickup remain separate across withdrawal', async ()
     pickupMutation,
   });
 
-  await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56.3, longitude: -4.8, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'session_live',
-    sessionScope: TEST_SESSION_SCOPE,
-    dbInstance,
-    now: () => 1000,
-  });
+  // Fixture represents an already accepted native tracking point; REST publication is tested separately.
+  values.set(`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`, { latitude: 56.3, longitude: -4.8 });
   assert.ok(values.has('trusted-pickup'));
   assert.ok(values.has(`driver_location_sessions/${TEST_APP_SESSION_ID}|session_live`));
 

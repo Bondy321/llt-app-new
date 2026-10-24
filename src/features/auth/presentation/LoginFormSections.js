@@ -14,7 +14,7 @@ import { COLORS } from './loginPresentationTheme';
 import styles from './loginScreenStyles';
 
 export function LoginCredentialFields({
-  activeInput, bookingReference, clearErrorState, email, emailVisible, errorState,
+  activeInput, bookingReference, clearErrorState, email, enrolmentSecret, setEnrolmentSecret, emailVisible, errorState,
   handleEmailBlur, handleLogin, handleReferenceChange, height, loading, modeHintFocus,
   responsiveStyles, scrollRef, setActiveInput, setEmail, setFieldTouched, setModeHintFocus,
 }) {
@@ -82,6 +82,17 @@ export function LoginCredentialFields({
                 />
               </View>
 
+              {bookingReference.trim().toUpperCase().startsWith('D-') ? (
+                <View style={styles.inputContainer}>
+                  <MaterialCommunityIcons name="shield-key-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
+                  <TextInput style={[styles.input, responsiveStyles.input]}
+                    value={enrolmentSecret} onChangeText={setEnrolmentSecret}
+                    placeholder="One-time device enrolment code" autoCapitalize="none" autoCorrect={false}
+                    secureTextEntry maxLength={48} textContentType="oneTimeCode"
+                    editable={!loading} accessibilityLabel="One-time device enrolment code"
+                    returnKeyType="go" onSubmitEditing={handleLogin} />
+                </View>
+              ) : null}
               {emailVisible ? (
                 <View style={[styles.inputContainer, activeInput === 'email' && styles.inputContainerFocused]}>
                   <MaterialCommunityIcons name="email-outline" size={22} color={COLORS.primaryBlue} style={styles.inputIcon} />
@@ -213,7 +224,7 @@ export function LoginActions({
 
               {showPrimaryHelp ? (
                 <View style={styles.helpPanel}>
-                  <Text style={styles.helpText}>Passengers sign in with booking reference + booking email. Drivers sign in with a D- code.</Text>
+                  <Text style={styles.helpText}>Passengers sign in with booking reference + booking email. Drivers need their D- ID and a one-time device enrolment code from dispatch.</Text>
                   <Text style={styles.helpText}>Offline sign-in only works for identities previously verified on this device.</Text>
                 </View>
               ) : null}

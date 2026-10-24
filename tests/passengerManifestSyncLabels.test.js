@@ -62,6 +62,7 @@ let manifestUpdater = async () => ({ success: true, queued: false });
 let manifestUpdateCalls = [];
 let cachedManifest = null;
 let cachedReplacements = [];
+const manifestSubscribers = new Set();
 let openedUrls = [];
 
 const originalLoad = Module._load;
@@ -181,13 +182,16 @@ Module._load = function mockLoader(request, parent, isMain) {
 
   if (request.endsWith('/services/driverManifestCacheService') || request === '../services/driverManifestCacheService') {
     return {
+      subscribe: (_scope, callback) => { manifestSubscribers.add(callback); return () => manifestSubscribers.delete(callback); },
       get: async () => ({ success: true, data: cachedManifest }),
       replace: async ({ manifest, tourId, driverId }) => {
         const data = { ...manifest, tourId, driverId, fetchedAtMs: 1, schemaVersion: 1 };
         cachedReplacements.push(data);
+        manifestSubscribers.forEach(callback => callback({ snapshot: data, reason: 'replace' }));
         return { success: true, data };
       },
       applyOptimisticUpdate: async () => ({ success: true }),
+      applyQueuedUpdate: async () => ({ success: true, queued: true }),
     };
   }
 

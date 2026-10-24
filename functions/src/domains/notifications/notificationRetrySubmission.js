@@ -4,6 +4,7 @@
 
 const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
 
+const { reserveProviderBudget } = require('./notificationProviderBudget');
 const { randomUUID } = require('node:crypto');
 const { admin } = require('../../bootstrap/firebaseAdmin');
 const { getExpoPushClient } = require('../../infrastructure/notifications/expoPushClient');
@@ -70,12 +71,12 @@ const createNotificationRetrySubmission = ({
   /** Retry worker is the only owner allowed to submit a retry generation. */
   const retryNotificationDeliveryAttempt = async ({
     db = admin.database(), job, attemptId, attempt, recipient,
-    nowMs = Date.now(), expo = getExpoPushClient(),
+    nowMs = Date.now(), expo = getExpoPushClient(), providerClock = Date.now,
   }) => {
-    const jobRef = db.ref(`notification_jobs/${job.jobId}`);
+    const jobRef = db.ref(`notification_jobs_v2/${job.jobId}`);
     const jobFence = await acquireNotificationRetrySubmissionFence({ jobRef, observedJob: job, nowMs });
     if (!jobFence.acquired) return { success: false, reason: 'JOB_NOT_CLAIMED' };
-    const attemptRef = db.ref(`notification_delivery_attempts/${attemptId}`);
+    const attemptRef = db.ref(`notification_delivery_attempts_v2/${attemptId}`);
     try {
       const currentJob = jobFence.job;
       let message;
@@ -99,6 +100,13 @@ const createNotificationRetrySubmission = ({
       if (!(await renewNotificationJobSubmissionFence({
         jobRef, leaseOwnerId: jobFence.ownerId, nowMs,
       }))) return { success: false, reason: 'JOB_LEASE_LOST' };
+      const budget = await reserveProviderBudget({ db, count: 1, marketing: job.audienceType === 'marketing', nowMs: providerClock() });
+      if (!budget.granted || providerClock() >= budget.expiresAtMs) {
+        await transitionDeliveryAttempt(db, attemptId, sending, { status: 'retrying', retryable: true, retryLease: null, requestStartedAtMs: null,
+          attemptNumber: Number(leased.attemptNumber || 0), availableAtMs: budget.retryAtMs,
+          safeErrorCode: 'PROJECT_PROVIDER_BUDGET' }, nowMs);
+        return { success: false, reason: 'PROJECT_PROVIDER_BUDGET' };
+      }
       let tickets;
       try {
         tickets = await expo.sendPushNotificationsAsync([message]);

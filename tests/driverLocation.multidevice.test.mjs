@@ -75,57 +75,19 @@ const scope = (sessionId, authUid) => ({
 const APP_SESSION_A = 'sess_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const APP_SESSION_B = 'sess_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-test('two driver devices own different live leaves and stale disconnect cannot remove the newer device', async () => {
+test('withdrawal targets the exact retired session and leaves the other handset untouched', async () => {
   const db = createRealtimeHarness();
-  await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56.1, longitude: -4.1, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'live_session_a',
-    sessionScope: scope(APP_SESSION_A, 'uid_a'),
-    dbInstance: db,
-    now: () => 1_000,
-  });
-  await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56.2, longitude: -4.2, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'live_session_b',
-    sessionScope: scope(APP_SESSION_B, 'uid_b'),
-    dbInstance: db,
-    now: () => 2_000,
-  });
-
   const pathA = `driver_location_sessions/${APP_SESSION_A}|live_session_a`;
   const pathB = `driver_location_sessions/${APP_SESSION_B}|live_session_b`;
-  assert.ok(db.values.has(pathA));
-  assert.ok(db.values.has(pathB));
-  await db.disconnect(pathA);
+  db.values.set(pathA, { authUid: 'uid_a' }); db.values.set(pathB, { authUid: 'uid_b' });
+  const result = await withdrawLiveDriverLocation({ tourId: 'TOUR_1', appSessionId: APP_SESSION_A,
+    dbInstance: db, expectedSessionId: 'live_session_a' });
+  assert.equal(result.withdrawalAcknowledged, true);
   assert.equal(db.values.has(pathA), false);
   assert.equal(db.values.get(pathB).authUid, 'uid_b');
-});
-
-test('live withdrawal compares both app-session and live-sharing ownership', async () => {
-  const db = createRealtimeHarness();
-  await publishDriverLocation({
-    tourId: 'TOUR_1',
-    location: { latitude: 56.2, longitude: -4.2, accuracy: 8 },
-    source: 'auto',
-    sessionId: 'live_session_b',
-    sessionScope: scope(APP_SESSION_B, 'uid_b'),
-    dbInstance: db,
-    now: () => 2_000,
-  });
-
-  const stale = await withdrawLiveDriverLocation({
-    tourId: 'TOUR_1',
-    appSessionId: APP_SESSION_B,
-    dbInstance: db,
-    expectedSessionId: 'live_session_a',
-  });
-  assert.equal(stale.withdrawalAcknowledged, true);
-  assert.equal(db.writes.at(-1).path, `driver_location_sessions/${APP_SESSION_B}|live_session_a`);
-  assert.ok(db.values.has(`driver_location_sessions/${APP_SESSION_B}|live_session_b`));
+  await withdrawLiveDriverLocation({ tourId: 'TOUR_1', appSessionId: APP_SESSION_B,
+    dbInstance: db, expectedSessionId: 'live_session_a' });
+  assert.equal(db.values.has(pathB), true);
 });
 
 test('manual pickup uses a durable source separate from live disconnect state', async () => {

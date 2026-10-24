@@ -12,9 +12,10 @@ const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors'
 const { isValidPushToken, TOUR_NOTIFICATION_CATEGORY_KEYS } = require('./notificationPolicy');
 const {
   buildMarketingAudienceUpdates,
-  persistMarketingAudienceForDevice,
 } = require('./notificationMarketingAudience');
-const { isOperationsAdmin, resolveOperationalAuthority } = require('./notificationAudiencePage');
+const { resolveOperationalAuthority } = require('./notificationAudiencePage');
+const { verifyOperationsAdminAccess } = require('../administration/public');
+const { publishNotificationMutation } = require('./notificationMutationPublication');
 const { transitionSafetyAlertStatus } = require('../safety/public');
 
 const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
@@ -22,7 +23,7 @@ const { acquireAppSessionLock, releaseAppSessionLock } = loadLegacyLibrary('appS
 const { acquireNotificationDeviceLock, releaseNotificationDeviceLock } = loadLegacyLibrary('appSessionCleanup');
 
 const PERMISSION_STATES = new Set(['granted', 'provisional', 'ephemeral', 'denied', 'blocked', 'unavailable']);
-const DEVICE_ACTIONS = new Set(['reconcile', 'preferences', 'logout', 'security_revoke', 'delete']);
+const DEVICE_ACTIONS = new Set(['reconcile', 'preferences', 'logout', 'security_revoke']);
 
 /** @param {any} value */
 const normalizeMarketingPreferences = (value) => {
@@ -193,15 +194,30 @@ const deleteNotificationAccountState = async ({
     await releaseNotificationDeviceLock({ lockRef: lock.lockRef, owner });
   }
 };
-const endedLogoutDeviceOwner = existing => existing.authoritySessionId || existing.operationalSessionId
+const endedLogoutDeviceOwner = existing => existing.authoritySessionId
   || (existing.lastMutationAction === 'logout' ? existing.lastMutationSessionId : null);
 const isOwnedEndedLogout = ({ action, requestedSessionId, session, existing }) => Boolean(
   action === 'logout' && requestedSessionId
   && (!session?.sessionId || session.sessionId === requestedSessionId)
   && endedLogoutDeviceOwner(existing) === requestedSessionId
 );
-const resolveRegistrationAuthority = ({ authUid, requestedSessionId, session, nowMs, action, existing }) => {
-  const active = isActiveSessionRecord(session, { nowMs }) && session.authUid === authUid;
+const supportedInstallationPublication = publication => !publication || (
+  publication.schemaVersion === 1 && /^[a-f0-9]{48}$/.test(publication.epoch || '')
+  && ['prepared', 'committed', 'blocked', 'deletion_prepared', 'deleted'].includes(publication.state)
+);
+const publicationBlocksRegistration = (publication, requestedSessionId) => (
+  ['deleted', 'deletion_prepared', 'prepared'].includes(publication?.state)
+  || (publication?.state === 'blocked' && requestedSessionId
+    && publication.previousSessionId && publication.previousSessionId !== requestedSessionId)
+);
+const resolveRegistrationAuthority = ({ authUid, requestedSessionId, session, publication, nowMs, action, existing }) => {
+  if (!supportedInstallationPublication(publication) || publicationBlocksRegistration(publication, requestedSessionId)) {
+    return { rejected: true, sessionId: null, expiresAtMs: null };
+  }
+  const active = isActiveSessionRecord(session, { nowMs }) && session.authUid === authUid
+    && publication?.state === 'committed' && publication.sessionId === session.sessionId;
+  if (!requestedSessionId && session?.status === 'active') return { rejected: true, sessionId: null, expiresAtMs: null };
+  if (active && !requestedSessionId) return { rejected: true, sessionId: null, expiresAtMs: null };
   if (requestedSessionId && (!active || session.sessionId !== requestedSessionId)) {
     // Mobile ends the canonical session before its notification logout. Exact
     // server-owned device proof still permits that delivery-reducing cleanup;
@@ -229,75 +245,48 @@ const resolveTransactionRejection = ({ current, suppliedRevision, registrationRe
   }
   return null;
 };
-const persistNotificationConsent = async ({ db, authUid, nextRecord, registrationRevision, nowMs, canMutate }) => {
-  await db.ref(`notification_consents/${authUid}`).transaction((current) => {
-    if (!canMutate()) return undefined;
-    if (Number(current?.registrationRevision || 0) > registrationRevision) return current;
-    return {
-      schemaVersion: 1,
-      authUid,
-      marketingPreferences: nextRecord.marketingPreferences,
-      consentVersion: 1,
-      consentUpdatedAtMs: nextRecord.marketingConsentUpdatedAtMs,
-      registrationRevision,
-      updatedAtMs: nowMs,
-    };
-  }, undefined, false);
-};
 const applyNotificationDeviceMutation = async ({
-  db, ref, authUid, input, action, state, token, operational,
-  suppliedRevision, registrationRevision, requestedSessionId, nowMs, authority, existing, canMutate,
+  db, authUid, input, action, state, token, operational, suppliedRevision, registrationRevision,
+  requestedSessionId, nowMs, authority, existing, canMutate, publication, tombstone, expiresAtMs, createPublisher,
 }) => {
-  let ignoredReason = null;
-  let nextRecord = null;
-  const result = await ref.transaction((currentValue) => {
-    nextRecord = null;
-    if (!canMutate()) { ignoredReason = 'SESSION_CHANGED'; return undefined; }
-    // A cold null must compare with the server when an existing device was
-    // observed. Only a genuinely absent first registration creates a device.
-    if (currentValue === null && Object.keys(existing).length) return null;
-    const current = currentValue || {};
-    if ((current.authoritySessionId || null) !== (existing.authoritySessionId || null)) {
-      ignoredReason = 'STALE_APP_SESSION'; return undefined;
-    }
-    ignoredReason = resolveTransactionRejection({
-      current, suppliedRevision, registrationRevision, action, requestedSessionId,
-    });
-    if (ignoredReason) return undefined;
-    nextRecord = buildNotificationDeviceRecord({
-      authUid, input, existing: current, action, state, token, operational,
-      authoritySessionId: authority.sessionId, nowMs, registrationRevision,
-    });
-    return nextRecord;
-  }, undefined, false);
-  if (!result?.committed || !nextRecord) {
-    if (ignoredReason === 'ALREADY_APPLIED') {
-      const canonical = result?.snapshot?.val?.()
-        || (await ref.once('value')).val();
-      const canonicalRevision = readPositiveRevision(canonical?.registrationRevision);
-      if (canonical && canonicalRevision) {
-        await persistNotificationConsent({
-          db, authUid, nextRecord: canonical, registrationRevision: canonicalRevision, nowMs, canMutate,
-        });
-        await persistMarketingAudienceForDevice({ db, authUid, device: canonical, canMutate });
-      }
-    }
-    return ignoredDeviceMutation(ignoredReason || 'STALE_DEVICE_MUTATION');
+  if (!canMutate()) return ignoredDeviceMutation('SESSION_CHANGED');
+  const rejected = resolveTransactionRejection({ current: existing, suppliedRevision,
+    registrationRevision, action, requestedSessionId });
+  if (rejected && rejected !== 'ALREADY_APPLIED') return ignoredDeviceMutation(rejected);
+  const nextRecord = rejected === 'ALREADY_APPLIED' ? existing : buildNotificationDeviceRecord({
+    authUid, input, existing, action, state, token, operational,
+    authoritySessionId: authority.sessionId, nowMs, registrationRevision,
+  });
+  const revision = Number(nextRecord.registrationRevision);
+  const updates = {
+    [`notification_devices/${authUid}`]: nextRecord,
+    [`notification_consents/${authUid}`]: { schemaVersion: 1, authUid,
+      marketingPreferences: nextRecord.marketingPreferences, consentVersion: 1,
+      consentUpdatedAtMs: nextRecord.marketingConsentUpdatedAtMs, registrationRevision: revision, updatedAtMs: nowMs },
+    ...buildMarketingAudienceUpdates({ authUid, device: nextRecord }),
+  };
+  try {
+    await publishNotificationMutation({ db, authUid, publication, sessionId: authority.sessionId,
+      existing, tombstone, updates, expiresAtMs, canMutate, createPublisher });
+  } catch (error) {
+    if (['SESSION_CHANGED', 'PERMISSION_DENIED', 'permission_denied'].includes(error?.code)) return ignoredDeviceMutation('SESSION_CHANGED');
+    throw error;
   }
-  await persistNotificationConsent({ db, authUid, nextRecord, registrationRevision, nowMs, canMutate });
-  await persistMarketingAudienceForDevice({ db, authUid, device: nextRecord, canMutate });
-  return { status: 200, body: { success: true, device: { permissionState: nextRecord.permissionState, operationalEligible: nextRecord.operationalEligible, marketingEligible: nextRecord.marketingEligible, status: nextRecord.status, tokenHash: nextRecord.tokenHash, registrationRevision, updatedAtMs: nowMs } } };
+  if (rejected) return ignoredDeviceMutation(rejected);
+  return { status: 200, body: { success: true, device: { permissionState: nextRecord.permissionState,
+    operationalEligible: nextRecord.operationalEligible, marketingEligible: nextRecord.marketingEligible,
+    status: nextRecord.status, tokenHash: nextRecord.tokenHash, registrationRevision: revision, updatedAtMs: nowMs } } };
 };
-const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, action, nowMs, clock, expiresAtMs }) => {
+const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, action, nowMs, clock, expiresAtMs, createPublisher }) => {
   const existing = (await ref.once('value')).val() || {};
-  if (action === 'delete') return removeNotificationDeviceRecords(db, authUid, existing, input, nowMs);
   const tombstone = (await db.ref(`notification_device_tombstones/${authUid}`).once('value')).val();
   if (tombstone?.permanent === true) return ignoredDeviceMutation('DEVICE_DELETED');
   const suppliedRevision = readPositiveRevision(input?.registrationRevision ?? input?.mutationRevision);
   const registrationRevision = suppliedRevision || (readPositiveRevision(existing.registrationRevision) || 0) + 1;
   const session = (await db.ref(`app_sessions/${authUid}`).once('value')).val();
   const requestedSessionId = optionalString(input?.appSessionId, 80);
-  const authority = resolveRegistrationAuthority({ authUid, requestedSessionId, session, nowMs: clock(), action, existing });
+  const publication = (await db.ref(`app_session_authority/${authUid}`).once('value')).val();
+  const authority = resolveRegistrationAuthority({ authUid, requestedSessionId, session, publication, nowMs: clock(), action, existing });
   if (authority.rejected) return ignoredDeviceMutation('STALE_APP_SESSION');
   // Recovery logout can reduce existing delivery, never install a new token,
   // permission or consent from an expired request.
@@ -305,9 +294,8 @@ const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, 
   const state = resolveDeviceInput(effectiveInput, existing);
   if (state.error) return { status: 400, body: { success: false, reason: state.error } };
   const token = shouldKeepToken(action, state) ? state.token : null;
-  // Every mutation callback checks the captured absolute deadline using a fresh
-  // clock. Once takeover is possible, an old callback cannot commit any device,
-  // consent or audience changes, including work queued behind an adapter await.
+  // The local deadline stops new preparation. Restricted publication additionally
+  // checks current authority and the deadline at the actual server commit.
   const canMutate = () => clock() < expiresAtMs
     && (!authority.expiresAtMs || clock() < authority.expiresAtMs);
   const operational = await resolveOperationalEligibility(
@@ -316,11 +304,12 @@ const processLockedNotificationDeviceUpdate = async ({ db, ref, authUid, input, 
   return applyNotificationDeviceMutation({
     db, ref, authUid, input: effectiveInput, action, state, token, operational,
     suppliedRevision, registrationRevision, requestedSessionId, nowMs, authority, existing, canMutate,
+    publication, tombstone, expiresAtMs, createPublisher,
   });
 };
 
-/** @param {{ db?: any, authUid: string, input: any, nowMs?: number, clock?: () => number }} options */
-const updateNotificationDevice = async ({ db = admin.database(), authUid, input, nowMs = Date.now(), clock = Date.now }) => {
+/** @param {{ db?: any, authUid: string, input: any, nowMs?: number, clock?: () => number, createPublisher?: any }} options */
+const updateNotificationDevice = async ({ db = admin.database(), authUid, input, nowMs = Date.now(), clock = Date.now, createPublisher }) => {
   const action = String(input?.action || 'reconcile').trim();
   if (!DEVICE_ACTIONS.has(action)) return { status: 400, body: { success: false, reason: 'INVALID_ACTION' } };
   const ref = db.ref(`notification_devices/${authUid}`);
@@ -332,7 +321,7 @@ const updateNotificationDevice = async ({ db = admin.database(), authUid, input,
     deviceLock = await acquireNotificationDeviceLock({ db, authUid, owner: operationOwner, nowMs });
     if (!deviceLock.acquired) return { status: 409, body: { success: false, reason: 'DEVICE_UPDATE_IN_PROGRESS' } };
     return await processLockedNotificationDeviceUpdate({ db, ref, authUid, input, action, nowMs, clock,
-      expiresAtMs: sessionLock.lock.expiresAtMs });
+      expiresAtMs: sessionLock.lock.expiresAtMs, createPublisher });
   } finally {
     if (deviceLock?.acquired) await releaseNotificationDeviceLock({ lockRef: deviceLock.lockRef, owner: operationOwner });
     await releaseAppSessionLock({ db, authUid, owner: operationOwner });
@@ -350,7 +339,7 @@ const requirePostAuth = async (req, res) => {
     res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
     return null;
   }
-  return auth.uid;
+  return auth;
 };
 
 const updateNotificationDeviceRegistration = onRequest({
@@ -358,8 +347,9 @@ const updateNotificationDeviceRegistration = onRequest({
   maxInstances: 20,
   cors: false,
 }, async (req, res) => {
-  const authUid = await requirePostAuth(req, res);
-  if (!authUid) return;
+  const requestAuth = await requirePostAuth(req, res);
+  if (!requestAuth) return;
+  const authUid = requestAuth.uid;
   const result = await updateNotificationDevice({ authUid, input: req.body || {} });
   res.status(result.status).json(result.body);
 });
@@ -400,8 +390,9 @@ const readMarketingNotificationDetail = async ({
 };
 
 const getMarketingNotificationDetail = onRequest({ region: 'europe-west1', maxInstances: 20, cors: false }, async (req, res) => {
-  const authUid = await requirePostAuth(req, res);
-  if (!authUid) return;
+  const requestAuth = await requirePostAuth(req, res);
+  if (!requestAuth) return;
+  const authUid = requestAuth.uid;
   const result = await readMarketingNotificationDetail({
     authUid,
     broadcastId: optionalString(req.body?.broadcastId, 160) || '',
@@ -410,11 +401,11 @@ const getMarketingNotificationDetail = onRequest({ region: 'europe-west1', maxIn
   res.status(result.status).json(result.body);
 });
 
-/** @param {{ db?: any, authUid: string, tourId: string, eventId: string }} options */
-const readSafetyAlertDetail = async ({ db = admin.database(), authUid, tourId, eventId }) => {
+/** @param {{ db?: any, authUid: string, tourId: string, eventId: string, claims?: any }} options */
+const readSafetyAlertDetail = async ({ db = admin.database(), authUid, tourId, eventId, claims }) => {
   if (!isValidFirebaseKey(tourId) || !isValidFirebaseKey(eventId)) return { status: 400, body: { success: false, reason: 'INVALID_INPUT' } };
   const profile = (await db.ref(`users/${authUid}`).once('value')).val() || {};
-  const adminAllowed = await isOperationsAdmin(db, authUid);
+  const adminAllowed = await verifyOperationsAdminAccess({ db, authUid, claims, requireSecondFactor: true });
   const authority = adminAllowed ? { allowed: true } : await resolveOperationalAuthority(db, authUid, profile, tourId);
   if (!authority.allowed || (!adminAllowed && authority.role !== 'driver')) {
     return { status: 403, body: { success: false, reason: 'NOT_AUTHORIZED' } };
@@ -441,11 +432,11 @@ const readSafetyAlertDetail = async ({ db = admin.database(), authUid, tourId, e
   };
 };
 
-/** @param {{ db?: any, authUid: string, tourId: string, eventId: string, action: string, notes?: string | null, nowMs?: number }} options */
+/** @param {{ db?: any, authUid: string, tourId: string, eventId: string, action: string, notes?: string | null, nowMs?: number, claims?: any }} options */
 const updateSafetyAlertStatus = async ({
-  db = admin.database(), authUid, tourId, eventId, action, notes = null, nowMs = Date.now(),
+  db = admin.database(), authUid, tourId, eventId, action, notes = null, nowMs = Date.now(), claims,
 }) => {
-  const access = await readSafetyAlertDetail({ db, authUid, tourId, eventId });
+  const access = await readSafetyAlertDetail({ db, authUid, tourId, eventId, claims });
   if (access.status !== 200) return access;
   const transition = await transitionSafetyAlertStatus({
     db, tourId, eventId, action, notes: optionalString(notes, 500), actorAuthUid: authUid, nowMs,
@@ -453,16 +444,17 @@ const updateSafetyAlertStatus = async ({
   if (transition.status !== 200) {
     return { status: transition.status, body: { success: false, reason: transition.reason } };
   }
-  return readSafetyAlertDetail({ db, authUid, tourId, eventId });
+  return readSafetyAlertDetail({ db, authUid, tourId, eventId, claims });
 };
 
 const getSafetyAlertDetail = onRequest({ region: 'europe-west1', maxInstances: 20, cors: false }, async (req, res) => {
   if (!applyAuthenticatedCors(req, res)) return res.status(403).json({ success: false, reason: 'ORIGIN_NOT_ALLOWED' });
   if (req.method === 'OPTIONS') return res.status(204).send('');
-  const authUid = await requirePostAuth(req, res);
-  if (!authUid) return;
+  const requestAuth = await requirePostAuth(req, res);
+  if (!requestAuth) return;
+  const authUid = requestAuth.uid;
   const input = {
-    authUid,
+    authUid, claims: requestAuth.claims,
     tourId: optionalString(req.body?.tourId, 160) || '',
     eventId: optionalString(req.body?.eventId, 160) || '',
     notes: optionalString(req.body?.notes, 500),

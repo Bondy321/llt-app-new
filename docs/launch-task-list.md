@@ -2,6 +2,16 @@
 
 Created: 8 October 2026
 
+## Current instruction — 24 October 2026
+
+The [first public launch brief](operations/first-public-launch-2026-10-24.md)
+supersedes the earlier trial/cohort sequence below. Prepare one coherent launch
+candidate; retain the completed operational history and current recovery paths.
+Repository delivery uses protected PRs and required checks. Production deployment,
+shared-data cleanup, customer messages and store publication require the separate
+owner launch action. The sections below remain a dated record, not the current
+release sequence or evidence that the new native candidate has passed acceptance.
+
 Prepare the existing passenger and driver app for a supported trial on one tour, then release matching iOS and Android versions. For each fix: implement, run the required checks, and merge promptly to GitHub main. Protected main requires a PR and six passing CI gates; this is the verification path, without an additional approval or staged rollout. Keep deployment and live verification concise, and distinguish code on main from changes already running in production. Public store release and passenger invitations follow the launch decisions.
 
 ## Agreed launch scope

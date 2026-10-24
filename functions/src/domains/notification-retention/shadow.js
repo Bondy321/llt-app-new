@@ -115,7 +115,7 @@ const scanCompactorPage = async ({ db, progress, limit, metrics }) => {
   let eligible = 0;
   let digest = progress.compactorDigest;
   for (const [jobId, state] of page.selected) {
-    const job = (await db.ref(`notification_jobs/${jobId}`).once('value')).val();
+    const job = (await db.ref(`notification_jobs_v2/${jobId}`).once('value')).val();
     metrics.queries += 1;
     if (!job) continue;
     const activeRequeue = await readActiveRequeue(
@@ -145,7 +145,7 @@ const scanCompactorPage = async ({ db, progress, limit, metrics }) => {
 const scanLegacyPage = async ({ db, progress, limit, metrics }) => {
   const page = await readOrderedPage({
     db,
-    root: 'notification_jobs',
+    root: 'notification_jobs_v2',
     field: 'updatedAtMs',
     cursor: progress.legacyCursor,
     endAt: progress.evaluationNowMs - RETENTION_MS,

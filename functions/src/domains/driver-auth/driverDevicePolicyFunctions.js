@@ -12,7 +12,8 @@ const { loadLegacyLibrary } = require('../../bootstrap/legacyLibrary');
 const { verifyRequestAuthUid } = require('../../infrastructure/auth/requestAuth');
 const { applyAuthenticatedCors } = require('../../infrastructure/http/adminCors');
 const { log } = require('../../infrastructure/logging/safeLogger');
-const { checkRateLimit } = require('../../infrastructure/rate-limit/requestRateLimiter');
+const { checkDistributedRequestLimit } = require('../../infrastructure/rate-limit/distributedRequestLimiter');
+const { cleanupExpiredStaffEnrolments } = require('./staffEnrolmentRetention');
 const { verifyOperationsAdminAccess } = require('../administration/public');
 const {
   cleanupExpiredDriverAssignmentRecords,
@@ -107,10 +108,10 @@ const authorizePolicyAdminRequest = async ({ req, res, rateLimitKey }) => {
     return { allowed: false, response: res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' }) };
   }
   const db = admin.database();
-  if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db }))) {
+  if (!(await verifyOperationsAdminAccess({ authUid: String(requestAuth.uid), db, claims: requestAuth.claims, requireSecondFactor: true }))) {
     return { allowed: false, response: res.status(403).json({ success: false, reason: 'NOT_AUTHORIZED' }) };
   }
-  if (!checkRateLimit(`${rateLimitKey}_${hashIdentifier(String(requestAuth.uid))}`, 20, 60 * 1000)) {
+  if (!(await checkDistributedRequestLimit({ req, authUid: String(requestAuth.uid), action: rateLimitKey, maxRequests: 20, db }))) {
     return { allowed: false, response: res.status(429).json({ success: false, reason: 'TRY_AGAIN_LATER' }) };
   }
   return { allowed: true, authUid: String(requestAuth.uid), db };
@@ -317,7 +318,7 @@ const advanceDriverPolicyTransition = async ({
       if (session?.principalType !== 'driver' || !isValidAppSessionId(session?.sessionId)) return;
       const generation = Number.isSafeInteger(session.driverLoginPolicyGeneration)
         ? session.driverLoginPolicyGeneration
-        : 0;
+        : -1;
       if (generation === normalized.policy.generation) return;
       updates[`${POLICY_CLEANUP_ROOT}/${authUid}`] = {
         schemaVersion: 1,
@@ -537,6 +538,7 @@ const cleanupDriverLoginPolicySessions = onScheduleWithResult(
     const transition = await advanceDriverPolicyTransition({ pageSize: 100 });
     const summary = await processDriverLoginPolicyCleanupJobs({ limit: 100 });
     const retention = await cleanupExpiredDriverPolicyRecords({ limit: 100 });
+    const staffProofRetention = await cleanupExpiredStaffEnrolments({ db: admin.database(), limit: 100 });
     const assignmentRetention = await cleanupExpiredDriverAssignmentRecords({
       db: admin.database(), limit: 100,
     });
@@ -545,7 +547,7 @@ const cleanupDriverLoginPolicySessions = onScheduleWithResult(
     } else {
       log.info('Driver policy cleanup completed', { transition, ...summary, ...retention });
     }
-    return { transition, assignmentTransitions, ...summary, ...retention, assignmentRetention };
+    return { transition, assignmentTransitions, ...summary, ...retention, assignmentRetention, staffProofRetention };
   },
 );
 

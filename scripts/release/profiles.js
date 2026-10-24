@@ -23,7 +23,7 @@ const UPDATE_TARGETS = Object.freeze({
     channel: 'testflight',
     environment: 'production',
     platform: 'ios',
-    driverTourPackTestflight: 'true',
+    driverTourPackTestflight: 'false',
   }),
   production: Object.freeze({
     buildProfile: 'production',
@@ -56,6 +56,7 @@ const createUpdateEnvironment = (targetName, baseEnvironment = process.env) => {
     ...baseEnvironment,
     EAS_BUILD_PROFILE: target.buildProfile,
     EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT: target.driverTourPackTestflight,
+    EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: ['production', 'testflight'].includes(targetName) ? 'true' : 'false',
   };
 };
 

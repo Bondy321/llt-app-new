@@ -5,11 +5,12 @@
 const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
 
 const { createHash, randomUUID } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 
 const QUEUE_ROOTS = Object.freeze({
-  fanout: 'notification_job_fanout_queue',
-  retry: 'notification_attempt_retry_queue',
-  receipt: 'notification_receipt_due_queue',
+  fanout: 'notification_job_fanout_queue_v2',
+  retry: 'notification_attempt_retry_queue_v2',
+  receipt: 'notification_receipt_due_queue_v2',
 });
 const QUEUE_KEY_WIDTH = 13;
 
@@ -21,19 +22,21 @@ const buildNotificationQueueKey = (dueAtMs, targetId, version = 1) => {
 };
 
 /** @param {'fanout'|'retry'|'receipt'} kind @param {string} targetId @param {number} dueAtMs @param {number} version */
-const buildQueueEntry = (kind, targetId, dueAtMs, version = 1) => ({
+const buildQueueEntry = (kind, targetId, dueAtMs, version = 1, lane = 'operational') => ({
   schemaVersion: 1,
   kind,
   targetId,
   dueAtMs,
   version,
+  serviceKey: `${lane}~${String(Math.max(0, Math.trunc(dueAtMs))).padStart(QUEUE_KEY_WIDTH, '0')}`,
   createdAtMs: Date.now(),
 });
 
 /**
- * Atomically removes the prior queue pointer, writes the target patch, and adds
- * the next queue pointer. Stale queue entries are harmless because consumers
- * compare the stored target version and queue key before claiming work.
+ * Commit an exact observed job before publishing its replacement queue pointer.
+ * Retain the previous pointer until publication succeeds: stale-pointer recovery
+ * repairs the canonical job's queue or terminal source/retention handoff. Attempts
+ * use their own accounting outbox and must never use this job-only transition.
  * @param {any} db
  * @param {object} input
  */
@@ -46,22 +49,25 @@ const transitionQueuedRecord = async (db, {
   targetId,
   additionalUpdates = {},
 }) => {
+  if (targetPath !== `notification_jobs_v2/${targetId}` || Object.keys(additionalUpdates).length) {
+    throw new Error('Queued job transitions cannot create records or publish unrelated updates');
+  }
   const nextVersion = Number(current.queueVersion || 0) + 1;
   const previousRoot = current.queueKind ? QUEUE_ROOTS[current.queueKind] : null;
   const nextRoot = queueKind ? QUEUE_ROOTS[queueKind] : null;
   const nextKey = nextRoot ? buildNotificationQueueKey(Number(dueAtMs), targetId, nextVersion) : null;
-  const updates = { ...additionalUpdates };
-  if (previousRoot && current.queueKey) updates[`${previousRoot}/${current.queueKey}`] = null;
-  Object.entries({
-    ...patch,
-    queueKind,
-    queueKey: nextKey,
-    queueVersion: nextVersion,
-  }).forEach(([key, value]) => { updates[`${targetPath}/${key}`] = value; });
+  const committed = await transactExistingRecord(db.ref(targetPath), observed => {
+    if (!isDeepStrictEqual(observed, current)) return undefined;
+    return { ...observed, ...patch, queueKind, queueKey: nextKey, queueVersion: nextVersion };
+  });
+  if (!committed.applied) throw Object.assign(new Error('Notification job changed before queue transition'), { code: 'NOTIFICATION_JOB_VERSION_CHANGED' });
   if (nextRoot && nextKey) {
-    updates[`${nextRoot}/${nextKey}`] = buildQueueEntry(queueKind, targetId, Number(dueAtMs), nextVersion);
+    await db.ref(`${nextRoot}/${nextKey}`).transaction(entry => entry || buildQueueEntry(queueKind, targetId, Number(dueAtMs), nextVersion,
+      current.serviceLane || (current.audienceType === 'marketing' ? 'marketing' : current.priorityClass === 'critical' ? 'critical' : 'operational')));
   }
-  await db.ref().update(updates);
+  // A terminal job still needs source publication and retention scheduling.
+  // Its old pointer remains the recovery outbox until the worker settles it.
+  if (nextRoot && previousRoot && current.queueKey) await db.ref(`${previousRoot}/${current.queueKey}`).set(null);
   return { queueKey: nextKey, queueVersion: nextVersion };
 };
 
@@ -70,6 +76,22 @@ const loadDueQueueEntries = async (db, kind, nowMs, limit) => {
   const upperBound = `${String(Math.max(0, Math.trunc(nowMs))).padStart(QUEUE_KEY_WIDTH, '0')}~\uf8ff`;
   const snapshot = await db.ref(QUEUE_ROOTS[kind]).orderByKey().endAt(upperBound).limitToFirst(limit).once('value');
   return Object.entries(snapshot.val() || {});
+};
+
+// Independent indexed lanes guarantee a campaign cannot occupy the complete
+// recovery page ahead of safety/chat/itinerary work. Each lane gets a bounded
+// third; unused capacity is deliberately not borrowed by an unbounded scan.
+const loadFairDueQueueEntries = async (db, kind, nowMs, limit) => {
+  const lanes = ['critical', 'operational', 'marketing'];
+  const perLane = Math.max(1, Math.floor(limit / lanes.length));
+  const results = [];
+  for (const lane of lanes) {
+    const snapshot = await db.ref(QUEUE_ROOTS[kind]).orderByChild('serviceKey')
+      .startAt(`${lane}~`).endAt(`${lane}~${String(Math.trunc(nowMs)).padStart(QUEUE_KEY_WIDTH, '0')}`)
+      .limitToFirst(perLane).once('value');
+    results.push(...Object.entries(snapshot.val() || {}));
+  }
+  return results;
 };
 
 /**
@@ -107,6 +129,7 @@ const releaseClaimedQueueEntry = async (queueRef, ownerId, dueAtMs = null) => {
     return {
       ...entry,
       ...(Number.isFinite(dueAtMs) ? { dueAtMs: Number(dueAtMs) } : {}),
+      ...(Number.isFinite(dueAtMs) ? { serviceKey: `${String(entry.serviceKey || 'operational~').split('~')[0]}~${String(Math.trunc(dueAtMs)).padStart(QUEUE_KEY_WIDTH, '0')}` } : {}),
       lease: null,
     };
   });
@@ -130,6 +153,7 @@ module.exports = {
   buildQueueEntry,
   claimQueueEntry,
   loadDueQueueEntries,
+  loadFairDueQueueEntries,
   releaseClaimedQueueEntry,
   removeClaimedQueueEntry,
   transitionQueuedRecord,

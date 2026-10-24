@@ -9,6 +9,7 @@ const projectId = 'demo-llt-session-cleanup';
 process.env.FIREBASE_CONFIG = JSON.stringify({ projectId, databaseURL: `https://${projectId}-default-rtdb.firebaseio.com` });
 process.env.GCLOUD_PROJECT = projectId;
 const admin = require('../functions/node_modules/firebase-admin');
+const { enrolSyntheticDriver } = require('./helpers/enrolSyntheticDriver');
 const { acquireAppSessionLock, releaseAppSessionLock, renewAppSessionLock } = require('../functions/lib/appSessionLock');
 const { cleanupAppSession } = require('../functions/lib/appSessionCleanup');
 const { verifyActiveAppSession } = require('../functions/lib/appSessionAccess');
@@ -37,7 +38,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 
 // Only asynchronous adapter boundaries are instrumented. Claims, cleanup,
 // issuance and every transaction use the real Admin SDK and emulator server.
-const interceptedDatabase = (database, hooks = {}) => ({ ref(path = '') {
+const interceptedDatabase = (database, hooks = {}) => ({ app: database.app, ref(path = '') {
   const wrap = ref => new Proxy(ref, { get(target, key) {
     if (key === 'once' || key === 'get') return async (...args) => {
       await hooks.beforeRead?.(path);
@@ -68,8 +69,10 @@ test.beforeEach(async () => {
   await db.ref().set(null);
   await db.ref().update({
     [`bookings/SYNTHETIC_BOOKING`]: { tourId, loginEligible: true },
+    'passenger_identity_security/SYNTHETIC_BOOKING': { passengerPrincipalId: principalId,
+      passengerIdentityVersion: 'pax_v2' },
     [`tours/${tourId}/isActive`]: true,
-    [`drivers/${driverId}`]: { currentTourId: tourId },
+    [`drivers/${driverId}`]: { name: 'Synthetic driver', currentTourId: tourId },
     [`tour_manifests/${tourId}/assigned_drivers/${driverId}`]: true,
     'driver_login_policy/v1': { schemaVersion: 1, enforceSingleDevice: false, generation: 0, revision: 1, updatedAtMs: now },
     [`notification_devices/${uid}`]: { schemaVersion: 1, authUid: uid, status: 'active',
@@ -80,6 +83,7 @@ test.after(async () => { await Promise.all(admin.apps.map(app => app.delete()));
 
 const issue = async (database = db, role = 'passenger', authUid = uid) => {
   if (role === 'driver') return issueDriverAppSession({ db: database, authUid, driverId, tourId,
+    ...(await enrolSyntheticDriver({ db: database, authUid, driverId, nowMs: now })), driverLoginPolicyGeneration: 0,
     nowMs: now, clock, profileUpdates: {
       [`users/${authUid}/principalType`]: 'driver', [`users/${authUid}/driverId`]: driverId,
       [`users/${authUid}/driverPrincipalId`]: `driver:${driverId}`,
@@ -88,7 +92,9 @@ const issue = async (database = db, role = 'passenger', authUid = uid) => {
   return issuePassengerAppSession({ db: database, authUid, principalId, tourId, nowMs: now, clock,
     identityUpdates: { [`users/${authUid}/bookingRef`]: 'SYNTHETIC_BOOKING',
       [`users/${authUid}/stablePassengerId`]: principalId, [`users/${authUid}/identityVersion`]: 'pax_v2',
-      [`users/${authUid}/lastUpdated`]: now },
+      [`users/${authUid}/lastUpdated`]: now,
+      [`passenger_identity_security/SYNTHETIC_BOOKING/deviceAuthorizationVersion`]: 2,
+      [`passenger_identity_security/SYNTHETIC_BOOKING/authorizedAuthUids/${authUid}`]: true },
     grantUpdates: buildVerifiedLoginGrantUpdates({ authUid, bookingRef: 'SYNTHETIC_BOOKING', tourId, nowMs: now }),
   });
 };
@@ -422,7 +428,8 @@ test('unassigned replacement notification registration retains its issuance-owne
   await paused.promise;
   now += 31000;
   await db.ref(`drivers/${driverId}/currentTourId`).remove();
-  const replacement = await cold(database => issueDriverAppSession({ db: database, authUid: uid,
+  const replacement = await cold(async database => issueDriverAppSession({ db: database, authUid: uid,
+    ...(await enrolSyntheticDriver({ db: database, authUid: uid, driverId, nowMs: now })), driverLoginPolicyGeneration: 0,
     driverId, tourId: null, nowMs: now, clock, profileUpdates: {
       [`users/${uid}/driverId`]: driverId, [`users/${uid}/driverPrincipalId`]: `driver:${driverId}`,
       [`users/${uid}/driverAssignedTourId`]: null, [`users/${uid}/principalType`]: 'driver',

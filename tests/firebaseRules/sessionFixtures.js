@@ -23,6 +23,10 @@ const passengerAuthorityUpdates = ({ uid, tourId, principalId = passengerIdFor(u
   const session = baseSession({ uid, principalType: 'passenger', principalId, driverId: null, tourId, nowMs });
   return {
     [`app_sessions/${uid}`]: session,
+    [`app_session_authority/${uid}`]: { schemaVersion: 1, epoch: 'a'.repeat(48), state: 'committed', sessionId: session.sessionId },
+    [`passenger_identity_security/${bookingRef}/deviceAuthorizationVersion`]: 2,
+    [`passenger_identity_security/${bookingRef}/passengerPrincipalId`]: principalId,
+    [`passenger_identity_security/${bookingRef}/authorizedAuthUids/${uid}`]: true,
     [`tours/${tourId}/participants/${uid}`]: {
       schemaVersion: 2,
       userId: uid,
@@ -55,11 +59,15 @@ const driverAuthorityUpdates = ({ uid, driverId, tourId, driverLoginPolicyGenera
       updatedAtMs: nowMs,
     },
     [`app_sessions/${uid}`]: session,
+    [`app_session_authority/${uid}`]: { schemaVersion: 1, epoch: 'b'.repeat(48), state: 'committed', sessionId: session.sessionId },
+    [`driver_staff_policy/${driverId}`]: { schemaVersion: 1, generation: 'c'.repeat(48) },
+    [`driver_device_authorizations/${uid}`]: { schemaVersion: 1, state: 'active', driverId, sessionId: session.sessionId, generation: 'c'.repeat(48) },
     [`users/${uid}/driverId`]: driverId,
     [`users/${uid}/driverPrincipalId`]: principalId,
     [`users/${uid}/driverAssignedTourId`]: tourId,
     [`users/${uid}/principalType`]: 'driver',
     [`drivers/${driverId}/authUid`]: uid,
+    [`drivers/${driverId}/authUidStaffGeneration`]: 'c'.repeat(48),
     [`drivers/${driverId}/currentTourId`]: tourId,
     [`tour_manifests/${tourId}/assigned_drivers/${driverId}`]: true,
   };

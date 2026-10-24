@@ -5,9 +5,7 @@ const {
   buildGroupPhotoChatEndpoint,
   createLocalMessageId,
   isTestEnv,
-  logChatEvent,
   logChatImageDbEvent,
-  maskUserId,
   normalizeMessageTimestamp,
   offlineSyncService,
   parseTimestampToMillis,
@@ -120,117 +118,52 @@ const sendInternalMessageDirect = async (payload, dbInstance) => {
   }
 };
 
-// Send a text message to the tour chat with optimistic response
-const sendMessage = async (tourId, message, senderInfo, dbInstance, options = {}) => {
+// Persist first: the immutable message ID is both the durable action identity
+// and the RTDB create-once key. A timed-out transaction may still acknowledge;
+// replay therefore always uses this same key instead of creating another send.
+const sendDurableText = async (tourId, message, senderInfo, dbInstance, options, internal) => {
   try {
     const validatedTourId = validateTourId(tourId);
     const validatedMessage = validateMessageText(message);
-    const validatedSender = validateSenderInfo(senderInfo);
-    logChatEvent('info', 'chat_message_send_started', {
-      tourId: validatedTourId,
-      messageLength: validatedMessage.length,
-      sender: summarizeSenderForDbLog(validatedSender),
-      onlineOption: options.online,
-      hasReplyTo: Boolean(options.replyTo),
-    });
-
-    const localMessageId = validateMessageId(options.messageId || createLocalMessageId('msg'));
-    const idempotencyKey = options.idempotencyKey || localMessageId;
-    const payload = {
-      tourId: validatedTourId,
-      messageId: localMessageId,
-      text: validatedMessage,
-      senderInfo: validatedSender,
-      timestamp: new Date().toISOString(),
-      idempotencyKey,
-      replyTo: sanitizeReplyContext(options.replyTo),
-    };
-
-    const directResult = options.online === false
-      ? { success: false, error: 'Device is offline' }
-      : await sendMessageDirect(payload, dbInstance || resolveRealtimeDb());
-    if (directResult.success) {
-      const optimisticMessage = { ...directResult.message, status: 'sent' };
-      logChatEvent('info', 'chat_message_send_completed', {
-        tourId: validatedTourId,
-        messageId: directResult.message?.id || null,
-        sender: summarizeSenderForDbLog(validatedSender),
-        queued: false,
-      });
-      return { success: true, message: optimisticMessage, queued: false, serverPromise: Promise.resolve(directResult) };
+    const sender = validateSenderInfo(senderInfo);
+    const id = validateMessageId(options.messageId || createLocalMessageId(internal ? 'int' : 'msg'));
+    const idempotencyKey = options.idempotencyKey || id;
+    const payload = { tourId: validatedTourId, messageId: id, text: validatedMessage,
+      senderInfo: sender, timestamp: new Date().toISOString(), idempotencyKey,
+      replyTo: sanitizeReplyContext(options.replyTo) };
+    const scope = { tourId: validatedTourId, principalId: sender.principalId,
+      role: internal || sender.principalType === 'driver' ? 'driver' : 'passenger', authUid: sender.authUid || null };
+    const queued = await offlineSyncService?.enqueueAction?.({ id: idempotencyKey,
+      type: internal ? 'INTERNAL_CHAT_MESSAGE' : 'CHAT_MESSAGE', tourId: validatedTourId,
+      scope, createdAt: payload.timestamp, payload, attempts: 0, status: 'queued' });
+    if (!queued?.success) return { success: false, error: queued?.error || 'Message could not be saved on this phone' };
+    options.onDurable?.();
+    const pending = { id, ...payload, senderName: sender.name, senderId: sender.principalId,
+      senderType: sender.principalType, ...(sender.stablePassengerId ? { senderStableId: sender.stablePassengerId } : {}),
+      isDriver: internal || sender.isDriver, type: 'text', status: 'queued' };
+    if (options.online === false) return { success: true, queued: true, message: pending };
+    let result;
+    try {
+      result = await withTimeout((internal ? sendInternalMessageDirect : sendMessageDirect)(payload, dbInstance),
+        options.deliveryTimeoutMs || 8000, 'Message delivery timed out');
+    } catch (error) { result = { success: false, error: error?.message || 'Network unavailable' }; }
+    if (result.success) {
+      // A failed local removal leaves the same idempotent action for recovery.
+      await offlineSyncService.removeAction?.(idempotencyKey, { scope }).catch(() => {});
+      return { success: true, queued: false, message: result.message, serverPromise: Promise.resolve(result) };
     }
-
-    const shouldQueue = options.online === false || /timeout|network|offline|unavailable/i.test(directResult.error || '');
-    if (!shouldQueue || !offlineSyncService?.enqueueAction) {
-      logChatEvent('warn', 'chat_message_send_failed_without_queue', {
-        tourId: validatedTourId,
-        sender: summarizeSenderForDbLog(validatedSender),
-        error: directResult.error || 'Failed to send message',
-        shouldQueue,
-        hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
-      });
-      return { success: false, error: directResult.error || 'Failed to send message' };
+    const retryable = /timeout|timed out|network|offline|unavailable|disconnect/i.test(result.error || '');
+    if (!retryable) {
+      await offlineSyncService.updateAction?.(idempotencyKey, { status: 'failed', lastError: result.error }, { scope });
+      return { success: false, error: result.error, durable: true, message: { ...pending, status: 'failed' } };
     }
-
-    const optimisticMessage = {
-      id: localMessageId,
-      text: validatedMessage,
-      senderName: validatedSender.name,
-      senderId: validatedSender.principalId,
-      senderType: validatedSender.principalType,
-      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
-      timestamp: payload.timestamp,
-      isDriver: validatedSender.isDriver,
-      status: 'queued',
-      type: 'text',
-      idempotencyKey,
-      ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
-    };
-
-    const queued = await offlineSyncService.enqueueAction({
-      id: idempotencyKey,
-      type: 'CHAT_MESSAGE',
-      tourId: validatedTourId,
-      scope: {
-        tourId: validatedTourId,
-        principalId: validatedSender.principalId,
-        role: validatedSender.principalType === 'driver' ? 'driver' : 'passenger',
-        authUid: validatedSender.authUid || null,
-      },
-      createdAt: payload.timestamp,
-      payload,
-      attempts: 0,
-      status: 'queued',
-      lastError: directResult.error || null,
-    });
-
-    if (!queued.success) {
-      logChatEvent('warn', 'chat_message_queue_failed', {
-        tourId: validatedTourId,
-        sender: summarizeSenderForDbLog(validatedSender),
-        idempotencyKey: maskUserId(idempotencyKey),
-        error: queued.error || 'Failed to queue message',
-      });
-      return { success: false, error: queued.error || 'Failed to queue message' };
-    }
-
-    logChatEvent('info', 'chat_message_queued', {
-      tourId: validatedTourId,
-      sender: summarizeSenderForDbLog(validatedSender),
-      messageId: localMessageId,
-      idempotencyKey: maskUserId(idempotencyKey),
-      originalError: directResult.error || null,
-    });
-    return { success: true, queued: true, message: optimisticMessage };
+    return { success: true, queued: true, message: pending };
   } catch (error) {
-    logChatEvent('error', 'chat_message_send_threw', {
-      tourId: typeof tourId === 'string' ? tourId.trim() : null,
-      sender: summarizeSenderForDbLog(senderInfo),
-      error: summarizeErrorForDbLog(error),
-    });
-    return { success: false, error: error.message };
+    return { success: false, error: error?.message || 'Message could not be saved' };
   }
 };
+const sendMessage = (tourId, message, senderInfo, dbInstance, options = {}) =>
+  sendDurableText(tourId, message, senderInfo, dbInstance, options, false);
 
 // Send an image message to the tour chat
 const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstance, options = {}) => {
@@ -347,115 +280,8 @@ const sendImageMessage = async (tourId, imageUrl, caption, senderInfo, dbInstanc
 };
 
 // Send a message to the internal driver chat for a tour
-const sendInternalDriverMessage = async (tourId, message, senderInfo, dbInstance, options = {}) => {
-  try {
-    const validatedTourId = validateTourId(tourId);
-    const validatedMessage = validateMessageText(message);
-    const validatedSender = validateSenderInfo(senderInfo);
-    logChatEvent('info', 'internal_chat_message_send_started', {
-      tourId: validatedTourId,
-      messageLength: validatedMessage.length,
-      sender: summarizeSenderForDbLog(validatedSender),
-      onlineOption: options.online,
-      hasReplyTo: Boolean(options.replyTo),
-    });
-
-    const localMessageId = validateMessageId(options.messageId || createLocalMessageId('int'));
-    const idempotencyKey = options.idempotencyKey || localMessageId;
-    const payload = {
-      tourId: validatedTourId,
-      messageId: localMessageId,
-      text: validatedMessage,
-      senderInfo: { ...validatedSender, isDriver: true },
-      timestamp: new Date().toISOString(),
-      idempotencyKey,
-      replyTo: sanitizeReplyContext(options.replyTo),
-    };
-
-    const directResult = options.online === false
-      ? { success: false, error: 'Device is offline' }
-      : await sendInternalMessageDirect(payload, dbInstance || resolveRealtimeDb());
-    if (directResult.success) {
-      logChatEvent('info', 'internal_chat_message_send_completed', {
-        tourId: validatedTourId,
-        messageId: directResult.message?.id || null,
-        sender: summarizeSenderForDbLog(validatedSender),
-        queued: false,
-      });
-      return { success: true, message: { ...directResult.message, status: 'sent' }, queued: false, serverPromise: Promise.resolve(directResult) };
-    }
-
-    const shouldQueue = options.online === false || /timeout|network|offline|unavailable/i.test(directResult.error || '');
-    if (!shouldQueue || !offlineSyncService?.enqueueAction) {
-      logChatEvent('warn', 'internal_chat_message_send_failed_without_queue', {
-        tourId: validatedTourId,
-        sender: summarizeSenderForDbLog(validatedSender),
-        error: directResult.error || 'Failed to send internal message',
-        shouldQueue,
-        hasOfflineSync: Boolean(offlineSyncService?.enqueueAction),
-      });
-      return { success: false, error: directResult.error || 'Failed to send internal message' };
-    }
-
-    const optimisticMessage = {
-      id: localMessageId,
-      text: validatedMessage,
-      senderName: validatedSender.name,
-      senderId: validatedSender.principalId,
-      senderType: validatedSender.principalType,
-      ...(validatedSender.stablePassengerId ? { senderStableId: validatedSender.stablePassengerId } : {}),
-      timestamp: payload.timestamp,
-      isDriver: true,
-      status: 'queued',
-      type: 'text',
-      idempotencyKey,
-      ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
-    };
-
-    const queued = await offlineSyncService.enqueueAction({
-      id: idempotencyKey,
-      type: 'INTERNAL_CHAT_MESSAGE',
-      tourId: validatedTourId,
-      scope: {
-        tourId: validatedTourId,
-        principalId: validatedSender.principalId,
-        role: 'driver',
-        authUid: validatedSender.authUid || null,
-      },
-      createdAt: payload.timestamp,
-      payload,
-      attempts: 0,
-      status: 'queued',
-      lastError: directResult.error || null,
-    });
-
-    if (!queued.success) {
-      logChatEvent('warn', 'internal_chat_message_queue_failed', {
-        tourId: validatedTourId,
-        sender: summarizeSenderForDbLog(validatedSender),
-        idempotencyKey: maskUserId(idempotencyKey),
-        error: queued.error || 'Failed to queue internal message',
-      });
-      return { success: false, error: queued.error || 'Failed to queue internal message' };
-    }
-
-    logChatEvent('info', 'internal_chat_message_queued', {
-      tourId: validatedTourId,
-      sender: summarizeSenderForDbLog(validatedSender),
-      messageId: localMessageId,
-      idempotencyKey: maskUserId(idempotencyKey),
-      originalError: directResult.error || null,
-    });
-    return { success: true, queued: true, message: optimisticMessage };
-  } catch (error) {
-    logChatEvent('error', 'internal_chat_message_send_threw', {
-      tourId: typeof tourId === 'string' ? tourId.trim() : null,
-      sender: summarizeSenderForDbLog(senderInfo),
-      error: summarizeErrorForDbLog(error),
-    });
-    return { success: false, error: error.message };
-  }
-};
+const sendInternalDriverMessage = (tourId, message, senderInfo, dbInstance, options = {}) =>
+  sendDurableText(tourId, message, senderInfo, dbInstance, options, true);
 
 // ==================== MESSAGE REACTIONS ====================
 // Canonical write contract source of truth:

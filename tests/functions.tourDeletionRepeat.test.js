@@ -11,9 +11,9 @@ const originalLoad = Module._load;
 Module._load = function mocked(request, parent, isMain) {
   if (!parent?.filename.endsWith('administrationFunctions.js')) return originalLoad(request, parent, isMain);
   if (request === 'firebase-functions/v2/https') return { onRequest: (_options, handler) => handler };
-  if (request.endsWith('/bootstrap/firebaseAdmin')) return { admin: { database: () => context.db } };
+  if (request.endsWith('/bootstrap/firebaseAdmin')) return { admin: { database: () => context.db, storage: () => ({ bucket: () => ({}) }) } };
   if (request.endsWith('/bootstrap/legacyLibrary')) return { loadLegacyLibrary: () => projection };
-  if (request.endsWith('/auth/requestAuth')) return { verifyRequestAuthUid: async () => ({ success: true, uid: 'fixture-admin' }) };
+  if (request.endsWith('/auth/requestAuth')) return { verifyRequestAuthUid: async () => ({ success: true, uid: 'fixture-admin', claims: { firebase: { sign_in_second_factor: 'totp' } } }) };
   if (request.endsWith('/database/operationLock')) return {
     acquireManualBookingLock: async ({ path }) => { context.locks.add(path); return true; },
     releaseManualBookingLock: async ({ path }) => { context.locks.delete(path); },
@@ -25,8 +25,9 @@ Module._load = function mocked(request, parent, isMain) {
     deleteStoragePrefixes: async () => { context.storageCalls += 1; return 0; },
     deleteStoragePaths: async () => { throw new Error('Unexpected storage path deletion'); },
   };
+  if (request === '../media/public') return { drainTourMediaForDeletion: async () => { context.mediaDrains += 1; } };
   if (request === './adminAuthorization') return { verifyOperationsAdminAccess: async () => true };
-  if (request === './manualPassengerBooking') return {};
+  if (request === './tourPublication') return { commitTourPublication: async ({ db, updates }) => db.ref().update(updates) };
   if (request === './tourDeletion') return deletion;
   return originalLoad(request, parent, isMain);
 };
@@ -68,7 +69,7 @@ const memory = initial => {
   return { state, ref, write };
 };
 const initialize = initial => {
-  context = { storageCalls: 0, rootWrites: 0, locks: new Set(), onTourRead: null };
+  context = { mediaDrains: 0, storageCalls: 0, rootWrites: 0, locks: new Set(), onTourRead: null };
   context.db = memory(initial);
   return context;
 };
@@ -99,21 +100,16 @@ test('repeating a completed tour deletion returns an exact zero-count result wit
   assert.equal(c.storageCalls, priorStorage);
 });
 
-test('missing-tour acknowledgement preserves orphan data and a concurrently recreated successor', async () => {
+test('missing-tour acknowledgement preserves orphan data and records a durable deletion fence', async () => {
   const c = initialize({ tours: {}, bookings: { ORPHAN: { tourId: TOUR } },
     tour_manifests: { [TOUR]: { passengers: { ORPHAN: { name: 'Fixture roster' } } } } });
-  let reads = 0;
-  c.onTourRead = () => {
-    reads += 1;
-    if (reads === 2) c.db.write(`tours/${TOUR}`, { name: 'Recreated successor' });
-  };
   const result = await requestDeletion();
   assert.equal(result.status, 200);
   assert.equal(result.body.alreadyDeleted, true);
   assert.equal(result.body.summary.databasePathsDeleted, 0);
-  assert.deepEqual(c.db.state.tours[TOUR], { name: 'Recreated successor' });
+  assert.equal(c.db.state.tours[TOUR], undefined);
   assert.equal(c.db.state.bookings.ORPHAN.tourId, TOUR);
   assert.equal(c.db.state.tour_manifests[TOUR].passengers.ORPHAN.name, 'Fixture roster');
-  assert.equal(c.rootWrites, 0);
+  assert.equal(c.db.state.sync_roster_control[TOUR].lifecycle.state, 'deleted');
   assert.equal(c.storageCalls, 0);
 });

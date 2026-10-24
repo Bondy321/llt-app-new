@@ -26,6 +26,7 @@ const OPTIONAL_ENV_VARS = [
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
   'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK',
+  'EXPO_PUBLIC_PASSENGER_TRIP_ENABLED',
 ];
 
 const PLACEHOLDER_PATTERNS = [
@@ -40,6 +41,7 @@ const PLACEHOLDER_PATTERNS = [
 ];
 
 const FORMAT_CHECKS = {
+  EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: { pattern: /^(true|false)$/, message: 'expected true or false' },
   EXPO_PUBLIC_FIREBASE_API_KEY: {
     pattern: /^AIza[0-9A-Za-z_-]{20,}$/,
     message: 'expected a Firebase web API key that starts with AIza',
@@ -196,11 +198,13 @@ const validateExpoPublicEnv = (env = process.env, options = {}) => {
   });
 
   const requireProductionAppCheck = options.requireProductionAppCheck === true
-    || env.LLT_REQUIRE_PRODUCTION_APPCHECK === 'true';
+    || env.LLT_REQUIRE_PRODUCTION_APPCHECK === 'true'
+    || ['production', 'testflight'].includes(env.EAS_BUILD_PROFILE);
   if (requireProductionAppCheck) {
     [
       'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK',
       'EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK',
+      'EXPO_PUBLIC_PASSENGER_TRIP_ENABLED',
     ].forEach((name) => {
       if (env[name] !== 'true') {
         errors.push(`${name} must be exactly true for production/TestFlight releases`);

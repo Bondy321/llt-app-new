@@ -22,6 +22,8 @@ export default function LoginScreenView({
   buttonAnimation,
   clearErrorState,
   email,
+  enrolmentSecret,
+  setEnrolmentSecret,
   emailVisible,
   errorState,
   formAnimation,
@@ -123,7 +125,7 @@ export default function LoginScreenView({
               </View>
 
               <LoginCredentialFields
-                {...{ activeInput, bookingReference, clearErrorState, email, emailVisible, errorState, handleEmailBlur, handleLogin, handleReferenceChange, height, loading, modeHintFocus, responsiveStyles, scrollRef, setActiveInput, setEmail, setFieldTouched, setModeHintFocus }}
+                {...{ activeInput, bookingReference, clearErrorState, email, enrolmentSecret, setEnrolmentSecret, emailVisible, errorState, handleEmailBlur, handleLogin, handleReferenceChange, height, loading, modeHintFocus, responsiveStyles, scrollRef, setActiveInput, setEmail, setFieldTouched, setModeHintFocus }}
               />
               <LoginErrorPanel {...{ errorState, handleOfflineCtaPress, loading, setShowRecoverySteps, showRecoverySteps }} />
               <LoginActions {...{ buttonAnimation, handleLogin, isSubmitDisabled, loading, responsiveStyles, setShowOfflineHelp, setShowPrimaryHelp, showOfflineHelp, showPrimaryHelp }} />

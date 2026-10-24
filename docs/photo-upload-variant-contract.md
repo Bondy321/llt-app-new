@@ -60,9 +60,11 @@ limited to 50 exact photo IDs and return five-minute signed URLs in memory. Uplo
 10 MB, accept supported image types only, and use a deterministic idempotency key and server-owned
 path. Group chat image messages persist `photoId`, never a media URL.
 
-App Check is explicitly disabled until the production apps are registered. The client and backend
-retain an opt-in mode for a later coordinated rollout; Auth, session, tour, path, ownership, size,
-content-type, and idempotency controls remain enforced while it is disabled.
+The supported 1.1.0 launch contract requires production App Check on media HTTP
+requests, alongside current session, tour, ownership, byte/decoded-image bounds
+and idempotency checks. Provider registration and matching native binaries must
+be verified before deployment; see the first-public-launch checklist. App Check
+does not replace any media authorization or generation precondition.
 
 Before release, back up and dry-run the bounded hardening migration for every tour appearing in
 either group-photo metadata or group chat. Deploy the server Functions and deny-all group Storage

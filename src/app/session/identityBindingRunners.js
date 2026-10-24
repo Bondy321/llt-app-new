@@ -12,7 +12,7 @@ export const runPersistPassengerIdentityForUser = async ({ IDENTITY_VERSION, isO
 
     const stablePassengerKey = toRealtimeKeySegment(stablePassengerId);
     try {
-      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
+      const snapshot = await boundedNetworkDecision(() => realtimeDb.ref(`users/${authUid}`).once('value'));
       const profile = snapshot.val() || {};
       const serverIdentityMatches = profile.stablePassengerId === stablePassengerId
         && profile.stablePassengerKey === stablePassengerKey
@@ -82,24 +82,21 @@ export const runRepairIdentityBindingFromSession = async ({ IDENTITY_VERSION, SE
     return repairedBinding;
   };
 
-export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION, SESSION_KEYS, SessionStorage, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, repairIdentityBindingFromSession, setIdentityBinding, toRealtimeKeySegment }, authUid) => {
+export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION, SESSION_KEYS, isOpaquePassengerId, logger, maskIdentifier, realtimeDb, setIdentityBinding, toRealtimeKeySegment, appSessionRef, appSessionService }, authUid, { isConnected, timeoutMs } = {}) => {
     if (!authUid || !realtimeDb) return;
+    if (isConnected === false) return;
+    const expectedSession = appSessionRef?.current;
+    if (expectedSession?.principalType !== 'passenger') return;
+    const isCurrent = () => appSessionRef.current === expectedSession;
 
     try {
-      const snapshot = await realtimeDb.ref(`users/${authUid}`).once('value');
+      const snapshot = await boundedNetworkDecision(() => realtimeDb.ref(`users/${authUid}`).once('value'), timeoutMs);
+      if (!isCurrent()) return;
       const userProfile = snapshot.val() || {};
       const stablePassengerId = userProfile.stablePassengerId;
 
-      if (!isOpaquePassengerId(stablePassengerId) || userProfile.identityVersion !== IDENTITY_VERSION) {
-        const repairedBinding = await repairIdentityBindingFromSession(authUid);
-        if (repairedBinding && repairedBinding.stablePassengerId) {
-          logger.info('Identity', 'identity_binding_repaired_from_session', {
-            authUid: maskIdentifier(authUid),
-            stablePassengerId: maskIdentifier(repairedBinding.stablePassengerId),
-            stablePassengerKey: maskIdentifier(repairedBinding.stablePassengerKey),
-          });
-          return;
-        }
+      if (!isOpaquePassengerId(stablePassengerId) || userProfile.identityVersion !== IDENTITY_VERSION
+        || stablePassengerId !== expectedSession.principalId) {
         logger.info('Identity', 'identity_binding_missing', { authUid: maskIdentifier(authUid) });
         return;
       }
@@ -113,10 +110,11 @@ export const runHydrateIdentityBindingForCurrentUser = async ({ IDENTITY_VERSION
         authUid,
       };
 
-      setIdentityBinding(hydratedBinding);
-      await SessionStorage.multiSet([
+      const committed = await appSessionService.persistProjection({ expectedSession, isCurrent, entries: [
         [SESSION_KEYS.IDENTITY_BINDING, JSON.stringify(hydratedBinding)],
-      ]);
+      ] });
+      if (!committed || !isCurrent()) return;
+      setIdentityBinding(hydratedBinding);
       logger.info('Identity', 'identity_binding_hydrated', {
         authUid: maskIdentifier(authUid),
         stablePassengerId: maskIdentifier(stablePassengerId),
@@ -145,3 +143,4 @@ export const runPersistDriverIdentityForUser = async ({ normalizeTourId, realtim
     assignedTourId: normalizeTourId(assignedTourId) || null,
   };
 };
+import { boundedNetworkDecision } from '../../../services/boundedNetworkDecision';

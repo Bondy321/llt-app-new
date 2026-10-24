@@ -3,7 +3,6 @@ import { PanResponder } from 'react-native';
 import logger from '../../../services/loggerService';
 import { isEligibleEdgeSwipe, shouldCommitEdgeSwipeHome } from '../../../services/swipeHomeNavigation';
 import { createAppRouteHistory } from '../../../utils/appRouteHistory';
-import { SESSION_KEYS, SessionStorage } from '../session/sessionStorage';
 
 export default function useAppNavigation({ driverTourPackFeature, homeScreen, persistScreen }) {
   const [currentScreen, setCurrentScreen] = useState('Login');
@@ -20,7 +19,7 @@ export default function useAppNavigation({ driverTourPackFeature, homeScreen, pe
     routeHistoryRef.current.reset();
     setCurrentScreen('DriverHome');
     setScreenParams({});
-    SessionStorage.setItem(SESSION_KEYS.LAST_SCREEN, 'DriverHome').catch(() => undefined);
+    persistScreenRef.current({ currentScreen: 'DriverHome' });
   }, [currentScreen, driverTourPackFeature.enabled, driverTourPackFeature.loading]);
 
   const navigateTo = useCallback((screen, params = {}, options = {}) => {

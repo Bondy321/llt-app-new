@@ -10,13 +10,7 @@ const { selectSnapshotPage } = require('../../infrastructure/database/rtdbQueryO
 const { isValidPushToken, userWantsTourCategoryBroadcast } = require('./notificationPolicy');
 const { getNotificationDeliveryPolicy } = require('./notificationDeliveryPolicy');
 const { isValidMarketingAudienceMembership } = require('./notificationMarketingAudience');
-const {
-  driverBindingAllowedByPolicy,
-  driverSessionMatchesPolicyGeneration,
-  readDriverLoginPolicy,
-} = require('../driver-auth/public');
-
-const { isActiveSessionRecord } = loadLegacyLibrary('appSession');
+const { verifyActiveAppSession } = loadLegacyLibrary('appSessionAccess');
 const PAGE_SIZE = 100;
 const PRIMARY_ADMIN_UID = '9CWQ4705gVRkfW5Xki5LyvrmVp23';
 const DEVICE_MIGRATION_STATE_PATH = 'notification_migrations/device_registry_v1';
@@ -150,53 +144,16 @@ const isOperationsAdmin = async (db, authUid, metrics = null) => {
 const loadAudienceEvaluationContext = async () => ({});
 
 /** @param {any} db @param {string} authUid @param {any} profile @param {string} tourId */
-const resolveOperationalAuthority = async (db, authUid, profile, tourId, nowMs = Date.now(), metrics = null) => {
-  countMetric(metrics, 'rtdbDirectReads');
-  const sessionSnapshot = await db.ref(`app_sessions/${authUid}`).once('value');
-  const session = sessionSnapshot.val();
-  if (!isActiveSessionRecord(session, { nowMs }) || session.authUid !== authUid) {
-    return { allowed: false, reason: 'inactive_operational_session' };
-  }
-  if (session.tourId !== tourId) return { allowed: false, reason: 'wrong_tour' };
-  if (session.principalType === 'passenger') return resolvePassengerAuthority(db, authUid, tourId, session, nowMs, metrics);
-  return resolveDriverAuthority(db, authUid, profile, tourId, session, metrics);
-};
-const resolvePassengerAuthority = async (db, authUid, tourId, session, nowMs, metrics = null) => {
+const resolveOperationalAuthority = async (db, authUid, _profile, tourId, nowMs = Date.now(), metrics = null) => {
+  // Count actual reads in the shared, bounded current-authority validator.
+  const measuredDb = metrics ? { ref: path => ({ once: async event => {
     countMetric(metrics, 'rtdbDirectReads');
-    const participantSnapshot = await db.ref(`tours/${tourId}/participants/${authUid}`).once('value');
-    const participant = participantSnapshot.val();
-    if (!participant) return { allowed: false, reason: 'wrong_tour' };
-    if (participant.schemaVersion === 2
-      && (participant.sessionId !== session.sessionId
-        || participant.principalId !== session.principalId
-        || Number(participant.sessionExpiresAtMs) <= nowMs)) {
-      return { allowed: false, reason: 'inactive_operational_session' };
-    }
-    return { allowed: true, session, role: 'passenger' };
-};
-const resolveDriverAuthority = async (db, authUid, profile, tourId, session, metrics = null) => {
-  const driverId = String(session.driverId || profile?.driverId || '').trim();
-  if (!isValidFirebaseKey(driverId)) return { allowed: false, reason: 'wrong_tour' };
-  countMetric(metrics, 'rtdbDirectReads', 3);
-  const [driverSnapshot, policyContext, assignmentSnapshot] = await Promise.all([
-    db.ref(`drivers/${driverId}`).once('value'),
-    readDriverLoginPolicy({ db }),
-    db.ref(`tour_manifests/${tourId}/assigned_drivers/${driverId}`).once('value'),
-  ]);
-  const policy = policyContext.policy;
-  const driver = driverSnapshot.val() || {};
-  if (!driverSessionMatchesPolicyGeneration(session, policy)
-    || !driverBindingAllowedByPolicy({
-      policy, authUid, claimedAuthUid: driver.authUid,
-    })
-    || profile?.driverId !== driverId
-    || profile?.driverPrincipalId !== session.principalId
-    || profile?.principalType !== 'driver'
-    || driver.currentTourId !== tourId
-    || assignmentSnapshot.val() !== true) {
-    return { allowed: false, reason: 'wrong_tour' };
-  }
-  return { allowed: true, session, role: 'driver' };
+    return db.ref(path).once(event);
+  } }) } : db;
+  const authority = await verifyActiveAppSession({ db: measuredDb, authUid, expectedTourId: tourId, nowMs });
+  if (authority.allowed) return authority;
+  const inactive = ['SESSION_INACTIVE', 'SESSION_AUTHORITY_CHANGED', 'PARTICIPANT_SESSION_MISMATCH'].includes(authority.reason);
+  return { allowed: false, reason: inactive ? 'inactive_operational_session' : 'wrong_tour' };
 };
 
 /** @param {string} token */
@@ -236,19 +193,26 @@ const loadIndexedCanonicalCandidate = async ({ db, job, candidate, metrics }) =>
   if (candidate.canonicalDeviceLoaded === true) reads.push(Promise.resolve({ kind: 'device', value: candidate.device || null }));
   else reads.push(db.ref(`notification_devices/${authUid}`).once('value').then((snapshot) => ({ kind: 'device', value: snapshot.val() })));
   reads.push(db.ref(`notification_device_tombstones/${authUid}`).once('value').then((snapshot) => ({ kind: 'tombstone', value: snapshot.val() })));
-  if (candidate.source === 'indexed_marketing') {
+  if (candidate.source === 'indexed_marketing' || (candidate.source === 'indexed_retry' && job.audienceType === 'marketing')) {
     reads.push(db.ref(`notification_consents/${authUid}`).once('value').then((snapshot) => ({ kind: 'consent', value: snapshot.val() })));
+  }
+  if (candidate.source === 'indexed_retry' && job.audienceType === 'marketing') {
+    reads.push(db.ref(`notification_marketing_audience/v1/${job.categoryKey}/${authUid}`).once('value')
+      .then(snapshot => ({ kind: 'membership', value: snapshot.val() })));
   }
   countMetric(metrics, 'rtdbDirectReads', reads.length - (candidate.canonicalDeviceLoaded === true ? 1 : 0));
   const values = Object.fromEntries((await Promise.all(reads)).map((entry) => [entry.kind, entry.value]));
   if (values.tombstone?.permanent === true) return { reason: 'device_deleted' };
   if (!values.device || typeof values.device !== 'object') return { reason: 'no_token' };
-  if (candidate.source === 'indexed_operational'
+  if ((candidate.source === 'indexed_operational'
+    || (candidate.source === 'indexed_retry' && !['marketing', 'single_installation'].includes(job.audienceType)))
     && values.device.operationalTourId !== job.tourId) return { reason: 'stale_audience_index' };
-  if (candidate.source === 'indexed_marketing') {
-    const membershipRevision = Number(candidate.membership?.registrationRevision || 0);
-    if (!isValidMarketingAudienceMembership(candidate.membership)
+  if (candidate.source === 'indexed_marketing' || (candidate.source === 'indexed_retry' && job.audienceType === 'marketing')) {
+    const membership = candidate.source === 'indexed_retry' ? values.membership : candidate.membership;
+    const membershipRevision = Number(membership?.registrationRevision || 0);
+    if (!isValidMarketingAudienceMembership(membership)
       || Number(values.device.registrationRevision || 0) !== membershipRevision
+      || Number(values.consent?.registrationRevision || 0) !== membershipRevision
       || values.consent?.marketingPreferences?.[job.categoryKey] !== true) {
       return { reason: 'stale_marketing_index' };
     }
@@ -262,6 +226,11 @@ const evaluateAudienceCandidate = async ({ db = admin.database(), job, candidate
   const authUid = String(candidate?.authUid || '').trim();
   countMetric(metrics, 'candidateEvaluations');
   if (!isValidFirebaseKey(authUid)) return { eligible: false, reason: 'invalid_token' };
+  if (job.audienceContract === 'indexed_v1' && !isIndexedCandidate(candidate)) {
+    // Retry/manual requeue must use the same canonical contract as discovery.
+    // A removed device cannot be replaced by an old user-profile push token.
+    candidate = { ...candidate, source: 'indexed_retry', canonicalDeviceLoaded: false };
+  }
   let resolvedCandidate = candidate;
   if (isIndexedCandidate(candidate)) {
     const canonical = await loadIndexedCanonicalCandidate({ db, job, candidate, metrics });

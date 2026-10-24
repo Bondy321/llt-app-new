@@ -1,3 +1,5 @@
+const { withHttpRequestBoundary } = require('../httpRequestBoundary');
+const { withPhotoRequestBoundary } = require('./photoRequestBoundary');
 const {
   GROUP_DELETE_FUNCTION_NAME,
   IDEMPOTENCY_KEY_MAX_LENGTH,
@@ -27,7 +29,7 @@ const {
 } = require('./photoMediaService');
 const { uploadPhoto } = require('./photoUploadService');
 
-const deleteGroupPhoto = async (
+const deleteGroupPhotoWithinBoundary = async (
   tourId,
   photoId,
   requestingUserId,
@@ -36,6 +38,7 @@ const deleteGroupPhoto = async (
     fetchFn = fetch,
     endpoint = buildGroupPhotoEndpointUrl(GROUP_DELETE_FUNCTION_NAME, authInstance),
     appCheckTokenFn = getCurrentAppCheckToken,
+    requestBoundary,
   } = {}
 ) => {
   try {
@@ -45,13 +48,13 @@ const deleteGroupPhoto = async (
       throw new Error('User ID is required to delete a photo');
     }
     if (!endpoint) throw new Error('Group photo delete endpoint is unavailable');
-    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, requestBoundary);
     const response = await fetchFn(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ tourId: validatedTourId, photoId: validatedPhotoId }),
     });
-    const payload = await response.json().catch(() => null);
+    const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
     if (!response.ok || payload?.success !== true) {
       if (payload?.reason === 'NOT_OWNER') throw new Error('You can only delete your own photos');
       throw new Error('Photo could not be deleted');
@@ -72,7 +75,7 @@ const deleteGroupPhoto = async (
 /**
  * Delete a photo from a private album
  */
-const deletePrivatePhoto = async (
+const deletePrivatePhotoWithinBoundary = async (
   tourId,
   ownerId,
   photoId,
@@ -81,6 +84,7 @@ const deletePrivatePhoto = async (
     fetchFn = fetch,
     endpoint = buildPrivatePhotoEndpointUrl(PRIVATE_DELETE_FUNCTION_NAME, authInstance),
     appCheckTokenFn = getCurrentAppCheckToken,
+    requestBoundary,
   } = {}
 ) => {
   if (!tourId || !ownerId || !photoId) {
@@ -98,13 +102,13 @@ const deletePrivatePhoto = async (
     });
 
     if (!endpoint) throw new Error('Private photo delete endpoint is unavailable');
-    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn);
+    const authHeaders = await buildGroupPhotoAuthHeaders(authInstance, appCheckTokenFn, requestBoundary);
     const response = await fetchFn(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ tourId, photoId }),
     });
-    const payload = await response.json().catch(() => null);
+    const payload = await response.json().catch(error => { if (error?.code?.startsWith('PHOTO_')) throw error; return null; });
     if (!response.ok || payload?.success !== true) {
       throw new Error(payload?.reason === 'NOT_AUTHORIZED'
         ? 'You no longer have access to this tour'
@@ -131,6 +135,13 @@ const deletePrivatePhoto = async (
   }
 };
 
+const deleteGroupPhoto = (tourId, photoId, requestingUserId, options = {}) => withPhotoRequestBoundary({
+  authInstance: options.authInstance || auth, fetchFn: options.fetchFn || fetch, timeoutMs: options.requestTimeoutMs ?? 15000,
+}, boundary => deleteGroupPhotoWithinBoundary(tourId, photoId, requestingUserId, { ...options, fetchFn: boundary.fetch, requestBoundary: boundary }));
+const deletePrivatePhoto = (tourId, ownerId, photoId, options = {}) => withPhotoRequestBoundary({
+  authInstance: options.authInstance || auth, fetchFn: options.fetchFn || fetch, timeoutMs: options.requestTimeoutMs ?? 15000,
+}, boundary => deletePrivatePhotoWithinBoundary(tourId, ownerId, photoId, { ...options, fetchFn: boundary.fetch, requestBoundary: boundary }));
+
 const updatePhotoCaption = async (
   { tourId, photoId, userId, ownerId, caption, visibility = 'group' },
   {
@@ -139,6 +150,7 @@ const updatePhotoCaption = async (
     updateFn = update,
     serverTimestampFn = serverTimestamp,
     nowFn = Date.now,
+    requestTimeoutMs = 15000,
   } = {},
 ) => {
   try {
@@ -163,11 +175,14 @@ const updatePhotoCaption = async (
     });
 
     const photoRef = dbRefFn(realtimeDbInstance, basePath);
-    await updateFn(photoRef, {
+    await withHttpRequestBoundary(async boundary => {
+      await updateFn(photoRef, {
       caption: validatedCaption,
       captionUpdatedAt: resolveRealtimeTimestamp(serverTimestampFn, nowFn),
       captionEditedBy: resolvedOwnerId,
-    });
+      });
+      boundary.check();
+    }, { timeoutMs: requestTimeoutMs });
 
     logPhotoDbEvent('info', 'photo_caption_update_success', {
       visibility: validatedVisibility,
@@ -179,6 +194,7 @@ const updatePhotoCaption = async (
 
     return { success: true };
   } catch (error) {
+    if (error?.code === 'REQUEST_TIMEOUT') error.message = 'The caption update is unconfirmed and may still complete. Reopen the photo to check before retrying.';
     logPhotoDbEvent('error', 'photo_caption_update_failed', {
       visibility,
       tourId: summarizePrincipalForDbLog(tourId),

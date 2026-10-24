@@ -40,6 +40,11 @@ const buildNotificationService = ({
 } = {}) => {
   const updates = [];
   const refPaths = [];
+  const deviceRequests = [];
+  // All importing services share one Firebase Auth/User identity, as in the app.
+  const firebaseAuth = {
+    currentUser: authUid ? { uid: authUid, getIdToken: async () => 'test-firebase-id-token' } : null,
+  };
   let permissionStatus = permission;
   let permissionChecks = 0;
   let responseHandler = null;
@@ -47,11 +52,10 @@ const buildNotificationService = ({
   let currentLastNotificationResponse = lastNotificationResponse;
   let clearedNotificationResponses = 0;
   process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID = 'demo-notification-project';
-  global.fetch = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ success: true }),
-  });
+  global.fetch = async (url, options) => {
+    deviceRequests.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+    return { ok: true, status: 200, json: async () => ({ success: true }) };
+  };
 
   Module._load = function mocked(request, parent, isMain) {
     if (request === 'expo-device') {
@@ -104,12 +108,8 @@ const buildNotificationService = ({
 
     if (request.endsWith('/firebase') || request === '../firebase') {
       return {
-        auth: {
-          currentUser: {
-            uid: authUid || '',
-            getIdToken: async () => 'test-firebase-id-token',
-          },
-        },
+        getCurrentAppCheckToken: async () => 'test-app-check-token',
+        auth: firebaseAuth,
         realtimeDb: {
           ref: (path = '') => {
             refPaths.push(path);
@@ -144,6 +144,7 @@ const buildNotificationService = ({
     service,
     updates,
     refPaths,
+    deviceRequests,
     setPermission: (next) => { permissionStatus = next; },
     emitNotificationResponse: (response) => responseHandler?.(response),
     wasResponseListenerRemoved: () => responseListenerRemoved,
@@ -164,7 +165,7 @@ test.after(() => {
 });
 
 test('saveUserPreferences persists canonical preference schema and token metadata', async () => {
-  const { service, updates } = buildNotificationService({ permission: 'granted' });
+  const { service, updates, deviceRequests } = buildNotificationService({ permission: 'granted', authUid: 'user-1' });
 
   const result = await service.saveUserPreferences('user-1', {
     ops: {
@@ -178,6 +179,12 @@ test('saveUserPreferences persists canonical preference schema and token metadat
   });
 
   assert.equal(result.success, true);
+  assert.equal(deviceRequests.length, 1);
+  assert.match(deviceRequests[0].url, /\/updateNotificationDeviceRegistration$/);
+  assert.equal(deviceRequests[0].headers.Authorization, 'Bearer test-firebase-id-token');
+  assert.equal(deviceRequests[0].headers['X-Firebase-AppCheck'], 'test-app-check-token');
+  assert.equal(deviceRequests[0].body.action, 'preferences');
+  assert.ok(Number.isSafeInteger(deviceRequests[0].body.registrationRevision));
   assert.equal(updates.length, 2);
   assert.deepEqual(updates[0].__tokenRequestOptions, { projectId: 'test-project-id' });
   assert.equal(updates[1].pushToken, 'ExponentPushToken[test-token]');
@@ -208,7 +215,7 @@ test('saveUserPreferences persists canonical preference schema and token metadat
 });
 
 test('saveUserPreferences handles denied permission path without throwing and marks token unavailable', async () => {
-  const { service, updates, setPermission } = buildNotificationService({ permission: 'denied' });
+  const { service, updates, setPermission, deviceRequests } = buildNotificationService({ permission: 'denied', authUid: 'user-2' });
   setPermission('denied');
 
   const result = await service.saveUserPreferences('user-2', {
@@ -219,6 +226,10 @@ test('saveUserPreferences handles denied permission path without throwing and ma
   });
 
   assert.equal(result.success, true);
+  assert.equal(deviceRequests.length, 1);
+  assert.equal(deviceRequests[0].headers['X-Firebase-AppCheck'], 'test-app-check-token');
+  assert.equal(deviceRequests[0].body.permissionState, 'denied');
+  assert.equal(deviceRequests[0].body.pushToken, null);
   assert.ok(result.warning.includes('notifications are disabled'));
   assert.equal(updates.length, 1);
   assert.equal(updates[0].pushToken, null);
@@ -232,7 +243,7 @@ test('saveUserPreferences handles denied permission path without throwing and ma
 });
 
 test('saveUserPreferences reuses a resolved onboarding permission without probing twice', async () => {
-  const { service, getPermissionCheckCount, updates } = buildNotificationService({ permission: 'granted' });
+  const { service, getPermissionCheckCount, updates } = buildNotificationService({ permission: 'granted', authUid: 'user-onboarding' });
 
   const result = await service.saveUserPreferences('user-onboarding', {
     ops: { group_chat: true },

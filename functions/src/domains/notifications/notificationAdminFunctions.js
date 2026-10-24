@@ -2,6 +2,7 @@
 
 // @ts-check
 
+const { resumeAttemptPublication } = require('./notificationAttemptPublication');
 const { transactExistingRecord } = require('../../infrastructure/database/existingRecordTransaction');
 
 const { randomUUID } = require('node:crypto');
@@ -40,7 +41,7 @@ const requireAdminRequest = async (req, res) => {
     return null;
   }
   const auth = await verifyRequestAuthUid(req);
-  if (!auth.success || !(await verifyOperationsAdminAccess({ authUid: auth.uid }))) {
+  if (!auth.success || !(await verifyOperationsAdminAccess({ authUid: auth.uid, claims: auth.claims, requireSecondFactor: true }))) {
     res.status(401).json({ success: false, reason: 'INVALID_CREDENTIALS' });
     return null;
   }
@@ -153,7 +154,7 @@ const acquireAudiencePreviewLease = async ({ previewRef, ownerAuthUid, nowMs }) 
 
 /** @param {any} db @param {string} previewId @param {string} ownerAuthUid @param {number} nowMs */
 const processAudiencePreviewChunk = async (db, previewId, ownerAuthUid, nowMs) => {
-  const previewRef = db.ref(`notification_audience_previews/${previewId}`);
+  const previewRef = db.ref(`notification_audience_previews_v2/${previewId}`);
   const claim = await acquireAudiencePreviewLease({ previewRef, ownerAuthUid, nowMs });
   const { ownerId, acquired } = claim;
   let state = claim.state;
@@ -213,7 +214,7 @@ async (req, res) => {
     if (!previewId) {
       const job = buildPreviewJob(req.body || {}, nowMs, authUid);
       previewId = `preview_v1_${randomUUID().replace(/-/gu, '')}`;
-      await db.ref(`notification_audience_previews/${previewId}`).set({
+      await db.ref(`notification_audience_previews_v2/${previewId}`).set({
         schemaVersion: 1, previewId, ownerAuthUid: authUid,
         targetKey: buildPreviewTargetKey(job), job, cursor: null,
         status: 'processing', audience: 0, eligible: 0, skipped: 0,
@@ -221,9 +222,9 @@ async (req, res) => {
         createdAtMs: nowMs, updatedAtMs: nowMs, expiresAtMs: nowMs + PREVIEW_TTL_MS,
       });
     } else {
-      const existing = (await db.ref(`notification_audience_previews/${previewId}`).once('value')).val();
+      const existing = (await db.ref(`notification_audience_previews_v2/${previewId}`).once('value')).val();
       if (!existing || existing.ownerAuthUid !== authUid || Number(existing.expiresAtMs || 0) <= nowMs) {
-        if (existing && Number(existing.expiresAtMs || 0) <= nowMs) await db.ref().update({ [`notification_audience_previews/${previewId}`]: null });
+        if (existing && Number(existing.expiresAtMs || 0) <= nowMs) await db.ref().update({ [`notification_audience_previews_v2/${previewId}`]: null });
         throw new Error('Preview not found');
       }
       if (req.body?.tourId || req.body?.categoryKey) {
@@ -302,37 +303,44 @@ const activateNotificationJobRequeue = async ({ jobRef, job, nowMs }) => {
 
 const requeueRecipient = async ({ db, job, authUid, state, requeueId, nowMs }) => {
   if (state?.requeueId === requeueId) return state.requeueOutcome || 'skipped';
-  const oldAttempt = state?.attemptId ? (await db.ref(`notification_delivery_attempts/${state.attemptId}`).once('value')).val() : null;
+  const oldAttempt = state?.attemptId ? (await db.ref(`notification_delivery_attempts_v2/${state.attemptId}`).once('value')).val() : null;
   if (!oldAttempt || ['provider_accepted', 'submission_unknown'].includes(oldAttempt.status)) return 'skipped';
   const device = (await db.ref(`notification_devices/${authUid}`).once('value')).val();
   const profile = (await db.ref(`users/${authUid}`).once('value')).val() || {};
   const recipient = await evaluateAudienceCandidate({ db, job, candidate: { authUid, device, profile, source: device ? 'device' : 'legacy_user' }, nowMs });
   if (!recipient.eligible) return 'skipped';
-  await db.ref(`notification_job_token_claims/${job.jobId}/${oldAttempt.tokenHash}`).transaction((owner) => owner === authUid ? null : owner);
-  const newClaim = await db.ref(`notification_job_token_claims/${job.jobId}/${recipient.tokenHash}`).transaction((owner) => owner || authUid);
+  await db.ref(`notification_job_token_claims_v2/${job.jobId}/${oldAttempt.tokenHash}`).transaction((owner) => owner === authUid ? null : owner);
+  const newClaim = await db.ref(`notification_job_token_claims_v2/${job.jobId}/${recipient.tokenHash}`).transaction((owner) => owner || authUid);
   if (newClaim.snapshot.val() !== authUid) return 'skipped';
   const generation = Number(state.generation || oldAttempt.generation || 1) + 1;
   const attemptId = buildDeliveryAttemptId(job.jobId, authUid, generation);
-  const existingNext = (await db.ref(`notification_delivery_attempts/${attemptId}`).once('value')).val();
+  let existingNext = (await db.ref(`notification_delivery_attempts_v2/${attemptId}`).once('value')).val();
   if (!existingNext) {
     await transitionDeliveryAttempt(db, state.attemptId, oldAttempt, { status: 'superseded', ticketStatus: 'superseded', receiptStatus: 'not_requested', retryable: false, supersededByAttemptId: attemptId, requeueId }, nowMs);
-    await transitionDeliveryAttempt(db, attemptId, {}, {
+    const initial = {
+      countsPublished: false, serviceLane: job.serviceLane || 'operational',
       schemaVersion: 2, attemptId, generation, jobId: job.jobId, recipientUid: authUid,
       installationUid: authUid, tokenHash: recipient.tokenHash, status: 'retrying',
       ticketStatus: 'pending', receiptStatus: 'not_requested', retryable: true,
       attemptNumber: 0, createdAtMs: nowMs, updatedAtMs: nowMs, requeueId,
       availableAtMs: nowMs, expiresAtMs: Number(job.expiresAtMs), safeErrorCode: null,
       queueKind: null, queueKey: null, queueVersion: 0,
-    }, nowMs);
+    };
+    const created = await db.ref(`notification_delivery_attempts_v2/${attemptId}`).transaction(current => current || initial);
+    existingNext = created.snapshot.val();
   }
-  await db.ref(`notification_job_recipients/${job.jobId}/${authUid}`).update({ generation, attemptId, tokenHash: recipient.tokenHash, status: 'requeued', requeueId, requeueOutcome: 'requeued', updatedAtMs: nowMs });
+  if (existingNext.publicationPending) existingNext = await resumeAttemptPublication(db, existingNext);
+  if (existingNext.countsPublished === false) {
+    await transitionDeliveryAttempt(db, attemptId, existingNext, { countsPublished: true }, nowMs);
+  }
+  await db.ref(`notification_job_recipients_v2/${job.jobId}/${authUid}`).update({ generation, attemptId, tokenHash: recipient.tokenHash, status: 'requeued', requeueId, requeueOutcome: 'requeued', updatedAtMs: nowMs });
   return 'requeued';
 };
 
 /** @param {{ db?: any, jobId: string, nowMs?: number }} options */
 // eslint-disable-next-line complexity -- bounded durable requeue owns initialization, lease and cursor progression
 const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowMs = Date.now() }) => {
-  const jobRef = db.ref(`notification_jobs/${jobId}`);
+  const jobRef = db.ref(`notification_jobs_v2/${jobId}`);
   let job = (await jobRef.once('value')).val();
   if (await isNotificationManualRequeueRetentionBlocked({ db, jobId, job })) {
     return { success: false, reason: NOTIFICATION_RETENTION_IN_PROGRESS };
@@ -350,7 +358,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
   if (!job || job.supersededByJobId || Number(job.expiresAtMs || 0) <= nowMs) {
     return { success: false, reason: 'JOB_NOT_REQUEUEABLE' };
   }
-  const stateRef = db.ref(`notification_requeue_jobs/${jobId}`);
+  const stateRef = db.ref(`notification_requeue_jobs_v2/${jobId}`);
   let state = (await stateRef.once('value')).val();
   const sourceCompletedAtMs = Number(job.completedAtMs || job.updatedAtMs || 0);
   if (REQUEUEABLE_STATUSES.has(job.status)) {
@@ -410,7 +418,7 @@ const requeueFailedNotificationJob = async ({ db = admin.database(), jobId, nowM
   });
   state = lease?.snapshot?.val?.() || state;
   if (!lease.applied || !acquired || state.lease?.ownerId !== leaseOwner) return { success: true, complete: false, status: 'processing', requeueId: state.requeueId, requeued: state.requeued, skipped: state.skipped };
-  let query = db.ref(`notification_job_recipients/${jobId}`).orderByKey();
+  let query = db.ref(`notification_job_recipients_v2/${jobId}`).orderByKey();
   if (state.cursor) query = query.startAfter(state.cursor);
   const records = Object.entries((await query.limitToFirst(REQUEUE_PAGE_SIZE + 1).once('value')).val() || {}).sort(([left], [right]) => left.localeCompare(right));
   const selected = records.slice(0, REQUEUE_PAGE_SIZE);

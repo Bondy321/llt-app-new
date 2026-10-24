@@ -54,7 +54,7 @@ state.
 | `409 SESSION_IN_PROGRESS` / `DEVICE_UPDATE_IN_PROGRESS` | Existing session/device lock owns mutation. | Retry after the bounded lock expires or finishes. |
 | `422 ACCOUNT_DELETION_SCOPE_INCOMPLETE` | Trusted session/profile/identity records contradict or lack required scope. | Investigate the authority data; do not infer scope from customer-supplied details. |
 | `429 RATE_LIMITED` | Hashed receipt/Auth quota exceeded. | Honour retry/backoff; do not rotate receipts to evade it. |
-| `503 ACCOUNT_DELETION_UNAVAILABLE` | Rollout record is malformed or the service failed closed. | Restore an exact reviewed compatibility record through the normal controlled process; do not enable `server_only`. |
+| `503 ACCOUNT_DELETION_UNAVAILABLE` | Rollout record is unsupported/malformed or the service failed closed. | Restore the exact reviewed schema-version-1 `server_only` record through the normal controlled process; do not restore the retired compatibility phase. |
 | `404 ACCOUNT_DELETION_STATUS_UNAVAILABLE` | No job matches that receipt-derived ID. | Keep the local record and investigate request acceptance; never claim completion. |
 
 ### Exact-session admission and revision fences
@@ -226,16 +226,16 @@ calls the same receipt-scoped endpoint. For non-retryable attention state, the a
 the client cannot requeue malformed work; escalate through the reviewed repair path. Do not state that
 deletion completed until status is `completed`.
 
-## Rollout checks
+## Supported launch configuration checks
 
-The only safe pre-cutover states are:
+The supported states are:
 
-- no `account_deletion_rollout/v1` record, which means `compatibility`; or
-- an exact schema-version-1 record with phase `compatibility`, positive revision and timestamp.
+- no `account_deletion_rollout/v1` record, which defaults to `server_only`; or
+- an exact schema-version-1 record with phase `server_only`, positive revision and timestamp.
 
-A malformed or partial record must fail closed. `server_only` is a future explicit cutover that removes
-legacy direct account-deletion permissions. This change does not enable it. Do not set or test that
-value in production as part of ordinary incident response.
+A malformed, partial or explicit compatibility record must fail closed. Server-owned deletion is the
+only launch contract; direct client deletion grants are retired. Owner-controlled configuration and
+matching Functions/rules/mobile deployment remain separate from repository implementation.
 
 Before any separately approved release, verify in non-production:
 
@@ -252,8 +252,8 @@ Before any separately approved release, verify in non-production:
 - completion redaction and 180-day retention cleanup;
 - post-retention status recovery through the identifier-free completion tombstone;
 - passenger-authored notification-job redaction and delayed-trigger tombstone behavior;
-- compatibility rules for old clients, with malformed rollout fail-closed.
+- rejection of old direct-client deletion, with unsupported/malformed configuration fail-closed.
 
-The later production cutover, if approved, must follow the repository release gates and an explicit
-Functions/rules/mobile compatibility plan. This runbook intentionally contains no instruction to deploy,
-merge, mutate the rollout record or enable `server_only`.
+Production activation must follow the repository release gates and the single first-launch checklist
+with matching Functions, rules and binaries. This runbook does not authorize deployment or shared-data
+configuration changes.

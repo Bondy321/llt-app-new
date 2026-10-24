@@ -5,33 +5,67 @@ const test = require('node:test');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 
+// Server-writer fences may wrap a closed rule without granting any access.
+// Evaluate each closed expression for ordinary and privileged writer identities.
+const assertClosedRule = expression => {
+  if (typeof expression === 'boolean') return assert.equal(expression, false);
+  for (const auth of [null, { uid: 'synthetic' },
+    { uid: 'synthetic', token: { lltMediaPublisher: true } },
+    { uid: 'synthetic', lltSessionIssuer: true }, { uid: 'synthetic', lltTourPublisher: true },
+    { uid: 'synthetic', lltNotificationIssuer: true }, { uid: 'synthetic', lltMediaPublisher: true }]) {
+    assert.equal(new Function('auth', `return (${expression});`)(auth), false);
+  }
+};
+const assertCurrentDriverAuthority = expression => {
+  for (const boundary of ['app_session_authority', 'driver_device_authorizations', 'driver_staff_policy']) {
+    assert.ok(expression.includes(boundary), `missing ${boundary} authority`);
+  }
+  assert.match(expression, /committed/);
+};
+
 test('Gate 6 opens only exact coherent-driver pack reads and keeps server roots private', () => {
   const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules;
   const packs = rules.driver_tour_packs;
-  assert.equal(packs['.read'], false);
-  assert.equal(packs['.write'], false);
+  assertClosedRule(packs['.read']);
+  assertClosedRule(packs['.write']);
   assert.ok(packs['.indexOn'].includes('expiresAtMs'));
+  assertCurrentDriverAuthority(packs.$departureKey['.read']);
   assert.match(packs.$departureKey['.read'], /users\/' \+ auth\.uid \+ '\/driverId/);
   assert.match(packs.$departureKey['.read'], /app_sessions\/' \+ auth\.uid \+ '\/driverId/);
   assert.match(packs.$departureKey['.read'], /drivers\/' \+ root\.child\('app_sessions\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) \+ '\/authUid/);
   assert.match(packs.$departureKey['.read'], /tour_manifests\/' \+ data\.child\('tourId'\)\.val\(\) \+ '\/assigned_drivers/);
-  assert.equal(packs.$departureKey['.write'], false);
+  assertClosedRule(packs.$departureKey['.write']);
   ['driver_tour_pack_tombstones', 'driver_tour_pack_ingestion'].forEach((root) => {
-    assert.deepEqual(rules[root], { '.read': false, '.write': false });
+    assertClosedRule(rules[root]['.read']);
+    assertClosedRule(rules[root]['.write']);
   });
 });
 
 test('Gate 6 action state is closed, bounded and exact-driver scoped', () => {
   const actions = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules.driver_tour_pack_actions;
-  assert.equal(actions['.read'], false);
-  assert.equal(actions['.write'], false);
+  assertClosedRule(actions['.read']);
+  assertClosedRule(actions['.write']);
   const action = actions.$departureKey.$driverId;
-  assert.equal(action['.write'], false);
+  assertClosedRule(action['.write']);
   assert.match(action.schemaVersion['.write'], /root\.child\('users\/' \+ auth\.uid \+ '\/driverId'\)\.val\(\) === \$driverId/);
   assert.match(action.schemaVersion['.write'], /drivers\/' \+ \$driverId \+ '\/authUid/);
   assert.match(action.schemaVersion['.write'], /tour_manifests/);
-  assert.equal(action.issues['.write'], false);
-  assert.equal(action.pickupStops.$pickupId['.write'], false);
+  assertCurrentDriverAuthority(action.schemaVersion['.write']);
+  assert.match(action.schemaVersion['.write'], /driver_tour_pack_feature_flags\/global/);
+  assert.match(action.schemaVersion['.write'], /driver_tour_pack_feature_flags\/drivers\//);
+  assert.doesNotMatch(action.schemaVersion['.write'], /driver_tour_pack_feature_flags\/testflight/);
+  const assertEveryMutationGated = node => {
+    for (const [key, value] of Object.entries(node)) {
+      if (value && typeof value === 'object') assertEveryMutationGated(value);
+      else if (key === '.write' && typeof value === 'string' && value.includes('app_sessions')) {
+        assert.match(value, /driver_tour_pack_feature_flags\/global/);
+        assert.match(value, /driver_tour_pack_feature_flags\/drivers\//);
+      }
+    }
+  };
+  assertEveryMutationGated(action);
+  assertClosedRule(action.issues['.write']);
+  assertClosedRule(action.pickupStops.$pickupId['.write']);
 });
 
 test('the ingestion export is private to the exact management runtime service account', () => {
@@ -71,9 +105,10 @@ test('the publisher code can write only pack, tombstone, ingestion and PII-free 
 test('the rollout flag denies listing and permits only exact coherent-driver canary reads', () => {
   const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'database.rules.json'), 'utf8')).rules;
   const flags = rules.driver_tour_pack_feature_flags;
-  assert.equal(flags['.read'], false);
-  assert.equal(flags['.write'], false);
-  assert.equal(flags.drivers['.read'], false);
+  assertClosedRule(flags['.read']);
+  assertClosedRule(flags['.write']);
+  assertClosedRule(flags.drivers['.read']);
+  assertCurrentDriverAuthority(flags.drivers.$driverId['.read']);
   assert.match(flags.drivers.$driverId['.read'], /users\/.*driverId/);
   assert.match(flags.drivers.$driverId['.read'], /drivers\/.*authUid/);
   assert.match(flags.drivers.$driverId['.write'], /admin_users/);

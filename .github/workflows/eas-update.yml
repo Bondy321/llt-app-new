@@ -20,23 +20,48 @@ concurrency:
   group: eas-update-testflight
   cancel-in-progress: true
 
+env:
+  TZ: Europe/London
+
 jobs:
   plan-update:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
       should_publish: ${{ steps.plan.outputs.should_publish }}
       reason: ${{ steps.plan.outputs.reason }}
     steps:
-      - name: Checkout repository at triggering commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
 
@@ -52,7 +77,7 @@ jobs:
   publish-testflight-update:
     needs: plan-update
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.prerequisites_verified == true && needs.plan-update.outputs.should_publish == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
       actions: read
@@ -72,30 +97,52 @@ jobs:
       EXPO_PUBLIC_SUPPORT_PHONE: '+441414876737'
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_URL }}
       EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS: ${{ secrets.EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_TIMEOUT_MS }}
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'false'
-      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'false'
-      LLT_REQUIRE_PRODUCTION_APPCHECK: 'false'
-      EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT: 'true'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_USE_APPCHECK: 'true'
+      EXPO_PUBLIC_VERIFY_PASSENGER_LOGIN_REQUIRE_APPCHECK: 'true'
+      LLT_REQUIRE_PRODUCTION_APPCHECK: 'true'
+      EXPO_PUBLIC_PASSENGER_TRIP_ENABLED: 'true'
+      EXPO_PUBLIC_DRIVER_TOUR_PACK_TESTFLIGHT: 'false'
       LLT_VALIDATE_PLATFORM: ios
 
     steps:
-      - name: Checkout repository at triggering commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
+      - name: Checkout exact event SHA with ephemeral read-only credentials
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$GITHUB_SERVER_URL" == https://github.com ]]
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${LLT_CHECKOUT_TOKEN:?Read-only repository token is required}"
+          [[ ! -e "$GITHUB_WORKSPACE/.git" ]]
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git config core.hooksPath /dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          authorization=$(printf 'x-access-token:%s' "$LLT_CHECKOUT_TOKEN" | base64 -w 0)
+          printf '::add-mask::%s\n' "$authorization"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $authorization"
+          export GIT_TERMINAL_PROMPT=0
+          git -c credential.helper= fetch --no-recurse-submodules origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' "$GITHUB_SHA"
+          unset authorization LLT_CHECKOUT_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git checkout --detach "$GITHUB_SHA"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
       - name: Verify release commit is on main
-        run: |
-          git fetch origin main --depth=1
-          git merge-base --is-ancestor ${{ github.sha }} origin/main
+        shell: bash
+        env:
+          LLT_CHECKOUT_TOKEN: ${{ github.token }}
+        run: bash .github/actions/verified-node/verify-main.sh
 
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+      - name: Install checksum-verified Node 24.22.1 without JavaScript actions
+        uses: ./.github/actions/verified-node
         with:
           node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Verify Node certificate-security baseline
         run: node scripts/security/nodeRuntimeTrust.js
@@ -113,6 +160,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Functions dependencies for the complete release audit
+        run: npm --prefix functions ci
+
+      - name: Install web admin dependencies for the complete release audit
+        run: npm --prefix web-admin ci
+
       - name: Audit production dependency graphs
         run: npm run security:audit:release
 
@@ -120,11 +173,7 @@ jobs:
         run: npm run validate:expo-env -- --platform=ios
 
       - name: Setup Expo and EAS CLI
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: 22.6.0
-          packager: npm
-          token: ${{ env.EXPO_TOKEN }}
+        run: npm install --global eas-cli@22.6.0
 
       - name: Verify pinned release CLIs
         run: node scripts/release/checkCliVersions.js --check-eas
